@@ -21,6 +21,11 @@ type store interface {
 	ListMappings(ctx context.Context) ([]core.ModelMapping, error)
 	UpsertModelMapping(ctx context.Context, mapping core.ModelMapping) error
 	FindMappings(ctx context.Context, protocol core.Protocol, alias string) ([]core.ModelMapping, error)
+	ListStationStatuses(ctx context.Context) (map[int64]core.StationStatus, error)
+	ListRequestLogs(ctx context.Context, limit int) ([]core.RequestLog, error)
+	ListFailoverEvents(ctx context.Context, limit int) ([]core.FailoverEvent, error)
+	UsageByStation(ctx context.Context) ([]core.UsageRow, error)
+	UsageByAlias(ctx context.Context) ([]core.UsageRow, error)
 }
 
 type Server struct {
