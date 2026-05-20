@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"relay-gateway/internal/admin"
 	"relay-gateway/internal/config"
 	"relay-gateway/internal/core"
 	"relay-gateway/internal/protocol/openai"
@@ -36,6 +37,12 @@ func NewServer(cfg config.Runtime, store store, selector *routing.Selector) http
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/openai/v1/responses", server.handleResponses)
+	adminHandler, err := admin.NewHandler(store)
+	if err != nil {
+		panic(err)
+	}
+	mux.Handle("/admin", adminHandler)
+	mux.Handle("/admin/", adminHandler)
 	return mux
 }
 

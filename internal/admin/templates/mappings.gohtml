@@ -1,0 +1,46 @@
+{{define "content"}}
+<h1>Mappings</h1>
+<form method="post" action="/admin/mappings" style="margin: 16px 0 24px 0; display: grid; gap: 8px; max-width: 640px;">
+  <select name="station_id" required>
+    <option value="">Select station</option>
+    {{range .Stations}}
+    <option value="{{.ID}}">{{.Name}}</option>
+    {{end}}
+  </select>
+  <select name="protocol" required>
+    <option value="openai">openai</option>
+    <option value="anthropic">anthropic</option>
+  </select>
+  <input name="alias" placeholder="Alias" required>
+  <input name="upstream_model" placeholder="Upstream model" required>
+  <label><input type="checkbox" name="enabled" checked> Enabled</label>
+  <button type="submit">Save Mapping</button>
+</form>
+
+<table>
+  <thead>
+    <tr>
+      <th>Station ID</th>
+      <th>Protocol</th>
+      <th>Alias</th>
+      <th>Upstream Model</th>
+      <th>Enabled</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Mappings}}
+    <tr>
+      <td>{{.StationID}}</td>
+      <td>{{.Protocol}}</td>
+      <td>{{.Alias}}</td>
+      <td>{{.UpstreamModel}}</td>
+      <td>{{.Enabled}}</td>
+    </tr>
+    {{else}}
+    <tr>
+      <td colspan="5">No mappings configured yet.</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}

@@ -157,6 +157,39 @@ func (s *Store) FindMappings(ctx context.Context, protocol core.Protocol, alias 
 	return mappings, rows.Err()
 }
 
+func (s *Store) ListMappings(ctx context.Context) ([]core.ModelMapping, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT id, station_id, protocol, alias, upstream_model, enabled
+        FROM model_mappings
+        ORDER BY alias ASC, protocol ASC, station_id ASC
+    `)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var mappings []core.ModelMapping
+	for rows.Next() {
+		var mapping core.ModelMapping
+		var enabled int
+		var protocolValue string
+		if err := rows.Scan(
+			&mapping.ID,
+			&mapping.StationID,
+			&protocolValue,
+			&mapping.Alias,
+			&mapping.UpstreamModel,
+			&enabled,
+		); err != nil {
+			return nil, err
+		}
+		mapping.Protocol = core.Protocol(protocolValue)
+		mapping.Enabled = enabled == 1
+		mappings = append(mappings, mapping)
+	}
+	return mappings, rows.Err()
+}
+
 func (s *Store) SaveStationStatus(ctx context.Context, status core.StationStatus) error {
 	_, err := s.db.ExecContext(ctx, `
         INSERT INTO station_statuses (

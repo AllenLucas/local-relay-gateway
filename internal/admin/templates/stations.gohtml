@@ -1,0 +1,45 @@
+{{define "content"}}
+<h1>Stations</h1>
+<form method="post" action="/admin/stations" style="margin: 16px 0 24px 0; display: grid; gap: 8px; max-width: 960px;">
+  <input name="name" placeholder="Station name" required>
+  <label><input type="checkbox" name="enabled" checked> Enabled</label>
+  <input name="priority" type="number" value="10" placeholder="Priority">
+  <input name="cooldown_seconds" type="number" value="30" placeholder="Cooldown seconds">
+  <input name="health_check_interval_seconds" type="number" value="15" placeholder="Health interval seconds">
+  <input name="health_check_timeout_seconds" type="number" value="5" placeholder="Health timeout seconds">
+  <input name="consecutive_failure_threshold" type="number" value="1" placeholder="Failure threshold">
+  <input name="consecutive_recovery_threshold" type="number" value="2" placeholder="Recovery threshold">
+  <input name="openai_base_url" placeholder="OpenAI base URL" required>
+  <input name="openai_api_key" placeholder="OpenAI API key" required>
+  <input name="anthropic_base_url" placeholder="Anthropic base URL" required>
+  <input name="anthropic_api_key" placeholder="Anthropic API key" required>
+  <button type="submit">Save Station</button>
+</form>
+
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Enabled</th>
+      <th>Priority</th>
+      <th>OpenAI Base URL</th>
+      <th>Anthropic Base URL</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Stations}}
+    <tr>
+      <td>{{.Name}}</td>
+      <td>{{.Enabled}}</td>
+      <td>{{.Priority}}</td>
+      <td>{{.OpenAIBaseURL}}</td>
+      <td>{{.AnthropicBaseURL}}</td>
+    </tr>
+    {{else}}
+    <tr>
+      <td colspan="5">No stations configured yet.</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}

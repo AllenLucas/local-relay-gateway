@@ -1,0 +1,25 @@
+{{define "layout"}}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>{{.Title}}</title>
+    <script defer src="/admin/assets/admin.js"></script>
+    <style>
+      body { font-family: Segoe UI, sans-serif; margin: 24px; background: #f6f8fb; color: #1c2430; }
+      nav a { margin-right: 16px; }
+      table { width: 100%; border-collapse: collapse; background: white; }
+      th, td { padding: 10px; border-bottom: 1px solid #d8e0eb; text-align: left; }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <a href="/admin/stations">Stations</a>
+      <a href="/admin/mappings">Mappings</a>
+      <a href="/admin/status">Status</a>
+      <a href="/admin/logs">Logs</a>
+    </nav>
+    {{template "content" .}}
+  </body>
+</html>
+{{end}}
