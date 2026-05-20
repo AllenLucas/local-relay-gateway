@@ -240,6 +240,59 @@ func TestResponsesHandlerProxiesSuccessfulResponseBodyAndHeader(t *testing.T) {
 	}
 }
 
+func TestResponsesHandlerTrimsModelAliasBeforeRouting(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
+		}
+		if payload["model"] != "gpt-5.1" {
+			t.Fatalf("rewritten model = %v, want gpt-5.1", payload["model"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Upstream-Station", "station-a")
+		_, _ = w.Write([]byte(`{"id":"resp_trimmed","status":"completed"}`))
+	}))
+	defer upstream.Close()
+
+	handler := newGatewayTestServer(t, []gatewayStationFixture{
+		{
+			station: core.Station{
+				Name:                         "station-a",
+				Enabled:                      true,
+				Priority:                     20,
+				CooldownSeconds:              30,
+				HealthCheckIntervalSeconds:   15,
+				HealthCheckTimeoutSeconds:    5,
+				ConsecutiveFailureThreshold:  1,
+				ConsecutiveRecoveryThreshold: 2,
+				OpenAIBaseURL:                upstream.URL,
+				OpenAIAPIKey:                 "OPENAI_A",
+				AnthropicBaseURL:             upstream.URL,
+				AnthropicAPIKey:              "ANTHROPIC_A",
+			},
+			mapping: core.ModelMapping{
+				Protocol:      core.ProtocolOpenAI,
+				Alias:         "gpt-5",
+				UpstreamModel: "gpt-5.1",
+				Enabled:       true,
+			},
+		},
+	})
+
+	recorder := performResponsesRequest(handler, "local-test-key", []byte(`{"model":" gpt-5 ","input":"hello","stream":false}`))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if got := recorder.Header().Get("X-Upstream-Station"); got != "station-a" {
+		t.Fatalf("X-Upstream-Station = %q, want %q", got, "station-a")
+	}
+	if got := recorder.Body.String(); got != `{"id":"resp_trimmed","status":"completed"}` {
+		t.Fatalf("body = %q", got)
+	}
+}
+
 type gatewayStationFixture struct {
 	station core.Station
 	mapping core.ModelMapping

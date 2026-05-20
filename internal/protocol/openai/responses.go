@@ -19,7 +19,8 @@ func NormalizeResponses(r *http.Request) (core.NormalizedRequest, error) {
 	}
 
 	alias, ok := body["model"].(string)
-	if !ok || strings.TrimSpace(alias) == "" {
+	alias = strings.TrimSpace(alias)
+	if !ok || alias == "" {
 		return core.NormalizedRequest{}, errors.New("model is required")
 	}
 	stream, _ := body["stream"].(bool)

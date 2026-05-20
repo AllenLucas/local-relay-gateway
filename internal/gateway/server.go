@@ -30,9 +30,7 @@ func NewServer(cfg config.Runtime, store store, selector *routing.Selector) http
 		store:    store,
 		selector: selector,
 		client: &http.Client{
-			Transport: &http.Transport{
-				ResponseHeaderTimeout: 15 * time.Second,
-			},
+			Transport: cloneDefaultTransport(),
 		},
 	}
 
@@ -102,4 +100,10 @@ func copyHeader(dst http.Header, src http.Header) {
 			dst.Add(key, value)
 		}
 	}
+}
+
+func cloneDefaultTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 15 * time.Second
+	return transport
 }
