@@ -160,3 +160,115 @@ func TestAdminRootWithTrailingSlashRedirectsToStations(t *testing.T) {
 		t.Fatalf("redirect location = %q, want %q", got, "/admin/stations")
 	}
 }
+
+func TestStationCreatePostRejectsMalformedNumericFields(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	handler, err := admin.NewHandler(store)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	form := url.Values{
+		"name":                           []string{"station-a"},
+		"enabled":                        []string{"on"},
+		"priority":                       []string{"oops"},
+		"cooldown_seconds":               []string{"30"},
+		"health_check_interval_seconds":  []string{"15"},
+		"health_check_timeout_seconds":   []string{"5"},
+		"consecutive_failure_threshold":  []string{"1"},
+		"consecutive_recovery_threshold": []string{"2"},
+		"openai_base_url":                []string{"https://a.example.com/openai"},
+		"openai_api_key":                 []string{"OPENAI_A"},
+		"anthropic_base_url":             []string{"https://a.example.com/anthropic"},
+		"anthropic_api_key":              []string{"ANTHROPIC_A"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/admin/stations", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+
+	stations, err := store.ListStations(context.Background())
+	if err != nil {
+		t.Fatalf("ListStations error = %v", err)
+	}
+	if len(stations) != 0 {
+		t.Fatalf("len(stations) = %d, want 0", len(stations))
+	}
+}
+
+func TestMappingCreatePostRejectsInvalidStationIDs(t *testing.T) {
+	testCases := []struct {
+		name      string
+		stationID string
+	}{
+		{name: "malformed", stationID: "abc"},
+		{name: "non_positive", stationID: "0"},
+		{name: "orphan", stationID: "999"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "gateway.db")
+			store, err := sqlitestore.NewStore(dbPath)
+			if err != nil {
+				t.Fatalf("NewStore error = %v", err)
+			}
+			defer store.Close()
+
+			if _, err := store.CreateStation(context.Background(), core.Station{
+				Name:                         "station-a",
+				Enabled:                      true,
+				Priority:                     20,
+				CooldownSeconds:              30,
+				HealthCheckIntervalSeconds:   15,
+				HealthCheckTimeoutSeconds:    5,
+				ConsecutiveFailureThreshold:  1,
+				ConsecutiveRecoveryThreshold: 2,
+				OpenAIBaseURL:                "https://a.example.com/openai",
+				OpenAIAPIKey:                 "OPENAI_A",
+				AnthropicBaseURL:             "https://a.example.com/anthropic",
+				AnthropicAPIKey:              "ANTHROPIC_A",
+			}); err != nil {
+				t.Fatalf("CreateStation error = %v", err)
+			}
+
+			handler, err := admin.NewHandler(store)
+			if err != nil {
+				t.Fatalf("NewHandler error = %v", err)
+			}
+
+			form := url.Values{
+				"station_id":     []string{tc.stationID},
+				"protocol":       []string{"openai"},
+				"alias":          []string{"gpt-5"},
+				"upstream_model": []string{"gpt-5.1"},
+			}
+			req := httptest.NewRequest(http.MethodPost, "/admin/mappings", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+			}
+
+			mappings, err := store.ListMappings(context.Background())
+			if err != nil {
+				t.Fatalf("ListMappings error = %v", err)
+			}
+			if len(mappings) != 0 {
+				t.Fatalf("len(mappings) = %d, want 0", len(mappings))
+			}
+		})
+	}
+}

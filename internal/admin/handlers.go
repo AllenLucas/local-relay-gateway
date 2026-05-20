@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"embed"
+	"errors"
 	"html/template"
 	"io/fs"
 	"net/http"
@@ -65,14 +66,38 @@ func (h *Handler) handleStations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		priority, _ := strconv.Atoi(r.Form.Get("priority"))
-		cooldownSeconds, _ := strconv.Atoi(r.Form.Get("cooldown_seconds"))
-		healthInterval, _ := strconv.Atoi(r.Form.Get("health_check_interval_seconds"))
-		healthTimeout, _ := strconv.Atoi(r.Form.Get("health_check_timeout_seconds"))
-		failureThreshold, _ := strconv.Atoi(r.Form.Get("consecutive_failure_threshold"))
-		recoveryThreshold, _ := strconv.Atoi(r.Form.Get("consecutive_recovery_threshold"))
+		priority, err := parseRequiredInt(r.Form.Get("priority"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		cooldownSeconds, err := parseRequiredInt(r.Form.Get("cooldown_seconds"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		healthInterval, err := parseRequiredInt(r.Form.Get("health_check_interval_seconds"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		healthTimeout, err := parseRequiredInt(r.Form.Get("health_check_timeout_seconds"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		failureThreshold, err := parseRequiredInt(r.Form.Get("consecutive_failure_threshold"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		recoveryThreshold, err := parseRequiredInt(r.Form.Get("consecutive_recovery_threshold"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 
-		_, err := h.store.CreateStation(r.Context(), core.Station{
+		_, err = h.store.CreateStation(r.Context(), core.Station{
 			Name:                         r.Form.Get("name"),
 			Enabled:                      r.Form.Get("enabled") == "on",
 			Priority:                     priority,
@@ -116,8 +141,22 @@ func (h *Handler) handleMappings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		stationID, _ := strconv.ParseInt(r.Form.Get("station_id"), 10, 64)
-		err := h.store.UpsertModelMapping(r.Context(), core.ModelMapping{
+		stationID, err := strconv.ParseInt(r.Form.Get("station_id"), 10, 64)
+		if err != nil || stationID <= 0 {
+			http.Error(w, "invalid station_id", http.StatusBadRequest)
+			return
+		}
+		stations, err := h.store.ListStations(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !stationExists(stations, stationID) {
+			http.Error(w, "invalid station_id", http.StatusBadRequest)
+			return
+		}
+
+		err = h.store.UpsertModelMapping(r.Context(), core.ModelMapping{
 			StationID:     stationID,
 			Protocol:      core.Protocol(r.Form.Get("protocol")),
 			Alias:         r.Form.Get("alias"),
@@ -151,4 +190,21 @@ func (h *Handler) handleMappings(w http.ResponseWriter, r *http.Request) {
 	if err := h.renderPage(w, "templates/mappings.gohtml", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func parseRequiredInt(value string) (int, error) {
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, errors.New("invalid numeric input")
+	}
+	return parsed, nil
+}
+
+func stationExists(stations []core.Station, stationID int64) bool {
+	for _, station := range stations {
+		if station.ID == stationID {
+			return true
+		}
+	}
+	return false
 }
