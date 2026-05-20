@@ -6,6 +6,15 @@ type StationsPage struct {
 	Title      string
 	WriteToken string
 	Stations   []core.Station
+
+	ShowOnboarding          bool
+	DefaultListenAddr       string
+	ExampleOpenAIBaseURL    string
+	ExampleAnthropicBaseURL string
+	ExampleOpenAIAlias      string
+	ExampleAnthropicAlias   string
+	ExampleOpenAIModel      string
+	ExampleAnthropicModel   string
 }
 
 type MappingsPage struct {

@@ -166,9 +166,17 @@ func (h *Handler) handleStations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := StationsPage{
-		Title:      "Stations",
-		WriteToken: h.writeToken,
-		Stations:   stations,
+		Title:                   "Stations",
+		WriteToken:              h.writeToken,
+		Stations:                stations,
+		ShowOnboarding:          len(stations) == 0,
+		DefaultListenAddr:       "127.0.0.1:8787",
+		ExampleOpenAIBaseURL:    "https://relay-a.example.invalid/openai",
+		ExampleAnthropicBaseURL: "https://relay-a.example.invalid/anthropic",
+		ExampleOpenAIAlias:      "gpt-5",
+		ExampleAnthropicAlias:   "claude-sonnet",
+		ExampleOpenAIModel:      "gpt-5.1",
+		ExampleAnthropicModel:   "claude-sonnet-4-5",
 	}
 	if err := h.renderPage(w, "templates/stations.gohtml", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

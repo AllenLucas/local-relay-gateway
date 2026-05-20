@@ -83,6 +83,63 @@ func TestStationsPageRendersSavedStations(t *testing.T) {
 	}
 }
 
+func TestStationsPageShowsOnboardingWhenEmpty(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	handler, err := admin.NewHandler(store, adminWriteToken)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/stations", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if !strings.Contains(recorder.Body.String(), "Quick Setup / 快速配置") {
+		t.Fatalf("body did not contain onboarding heading: %s", recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "claude-sonnet") {
+		t.Fatalf("body did not contain onboarding alias example: %s", recorder.Body.String())
+	}
+}
+
+func TestStationsPageHidesOnboardingWhenStationsExist(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	if _, err := createAdminTestStation(store, "station-a"); err != nil {
+		t.Fatalf("CreateStation error = %v", err)
+	}
+
+	handler, err := admin.NewHandler(store, adminWriteToken)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/stations", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if strings.Contains(recorder.Body.String(), "Quick Setup / 快速配置") {
+		t.Fatalf("body unexpectedly contained onboarding heading: %s", recorder.Body.String())
+	}
+}
+
 func TestMappingCreatePostRedirectsBackToPage(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "gateway.db")
 	store, err := sqlitestore.NewStore(dbPath)

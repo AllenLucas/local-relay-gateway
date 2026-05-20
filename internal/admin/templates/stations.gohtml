@@ -1,5 +1,30 @@
 {{define "content"}}
 <h1>Stations</h1>
+{{if .ShowOnboarding}}
+<section style="margin: 16px 0 24px 0; padding: 16px; background: #ffffff; border: 1px solid #d8e0eb;">
+  <h2>Quick Setup / 快速配置</h2>
+  <p>Start the gateway locally, then open the admin page and add your first relay station. / 先在本地启动网关，然后打开管理页面并添加第一个中转站。</p>
+  <ol>
+    <li>
+      <strong>Step 1 / 第一步</strong><br>
+      Gateway default address: <code>http://{{.DefaultListenAddr}}</code><br>
+      网关默认地址：<code>http://{{.DefaultListenAddr}}</code>
+    </li>
+    <li>
+      <strong>Step 2 / 第二步</strong><br>
+      Fill one station with both OpenAI and Anthropic upstream settings. / 为一个站点同时填写 OpenAI 和 Anthropic 上游配置。<br>
+      OpenAI base URL example: <code>{{.ExampleOpenAIBaseURL}}</code><br>
+      Anthropic base URL example: <code>{{.ExampleAnthropicBaseURL}}</code>
+    </li>
+    <li>
+      <strong>Step 3 / 第三步</strong><br>
+      After saving the station, create model mappings under Mappings. / 保存站点后，到 Mappings 页面建立模型映射。<br>
+      OpenAI alias example: <code>{{.ExampleOpenAIAlias}}</code> -> <code>{{.ExampleOpenAIModel}}</code><br>
+      Anthropic alias example: <code>{{.ExampleAnthropicAlias}}</code> -> <code>{{.ExampleAnthropicModel}}</code>
+    </li>
+  </ol>
+</section>
+{{end}}
 <form method="post" action="/admin/stations" style="margin: 16px 0 24px 0; display: grid; gap: 8px; max-width: 960px;">
   <input type="hidden" name="write_token" value="{{.WriteToken}}">
   <input name="name" placeholder="Station name" required>
