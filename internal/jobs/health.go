@@ -49,7 +49,7 @@ func StartHealthLoop(ctx context.Context, store healthStore, selector *routing.S
 					}
 
 					resp, err := client.Do(req)
-					if err != nil || resp.StatusCode >= http.StatusBadRequest {
+					if healthCheckFailed(err, resp) {
 						message := "health check failed"
 						if err != nil {
 							message = err.Error()
@@ -75,7 +75,11 @@ func StartHealthLoop(ctx context.Context, store healthStore, selector *routing.S
 func healthURL(baseURL string) string {
 	trimmed := strings.TrimRight(baseURL, "/")
 	if trimmed == "" {
-		return "/health"
+		return "/models"
 	}
-	return trimmed + "/health"
+	return trimmed + "/models"
+}
+
+func healthCheckFailed(err error, resp *http.Response) bool {
+	return err != nil || (resp != nil && resp.StatusCode >= http.StatusInternalServerError)
 }
