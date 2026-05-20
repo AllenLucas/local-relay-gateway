@@ -104,8 +104,15 @@ func (s *Store) UpsertModelMapping(ctx context.Context, mapping core.ModelMappin
 	if !isSupportedProtocol(mapping.Protocol) {
 		return fmt.Errorf("unsupported protocol: %q", mapping.Protocol)
 	}
+	exists, err := s.stationExists(ctx, mapping.StationID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("unknown station_id: %d", mapping.StationID)
+	}
 
-	_, err := s.db.ExecContext(ctx, `
+	_, err = s.db.ExecContext(ctx, `
         INSERT INTO model_mappings (station_id, protocol, alias, upstream_model, enabled)
         VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(station_id, protocol, alias)
@@ -229,4 +236,20 @@ func isSupportedProtocol(protocol core.Protocol) bool {
 	default:
 		return false
 	}
+}
+
+func (s *Store) stationExists(ctx context.Context, stationID int64) (bool, error) {
+	if stationID <= 0 {
+		return false, nil
+	}
+
+	var exists int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM stations WHERE id = ?`, stationID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }

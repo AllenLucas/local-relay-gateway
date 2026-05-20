@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"time"
@@ -40,7 +42,7 @@ func NewServer(cfg config.Runtime, store store, selector *routing.Selector) http
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/openai/v1/responses", server.handleResponses)
-	adminHandler, err := admin.NewHandler(store)
+	adminHandler, err := admin.NewHandler(store, deriveAdminWriteToken(cfg.LocalAPIKey))
 	if err != nil {
 		panic(err)
 	}
@@ -127,4 +129,9 @@ func cloneDefaultTransport() *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = 15 * time.Second
 	return transport
+}
+
+func deriveAdminWriteToken(localAPIKey string) string {
+	sum := sha256.Sum256([]byte("admin-write-token:" + localAPIKey))
+	return hex.EncodeToString(sum[:16])
 }

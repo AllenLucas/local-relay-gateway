@@ -25,10 +25,11 @@ type store interface {
 
 type Handler struct {
 	store      store
+	writeToken string
 	staticRoot http.Handler
 }
 
-func NewHandler(store store) (http.Handler, error) {
+func NewHandler(store store, writeToken string) (http.Handler, error) {
 	staticFS, err := fs.Sub(assets, "assets")
 	if err != nil {
 		return nil, err
@@ -36,6 +37,7 @@ func NewHandler(store store) (http.Handler, error) {
 
 	handler := &Handler{
 		store:      store,
+		writeToken: writeToken,
 		staticRoot: http.StripPrefix("/admin/assets/", http.FileServer(http.FS(staticFS))),
 	}
 
@@ -64,6 +66,10 @@ func (h *Handler) handleStations(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		if err := r.ParseForm(); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if !h.isValidWriteToken(r.Form.Get("write_token")) {
+			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 
@@ -153,8 +159,9 @@ func (h *Handler) handleStations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := StationsPage{
-		Title:    "Stations",
-		Stations: stations,
+		Title:      "Stations",
+		WriteToken: h.writeToken,
+		Stations:   stations,
 	}
 	if err := h.renderPage(w, "templates/stations.gohtml", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -165,6 +172,10 @@ func (h *Handler) handleMappings(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		if err := r.ParseForm(); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if !h.isValidWriteToken(r.Form.Get("write_token")) {
+			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 
@@ -226,13 +237,18 @@ func (h *Handler) handleMappings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := MappingsPage{
-		Title:    "Mappings",
-		Stations: stations,
-		Mappings: mappings,
+		Title:      "Mappings",
+		WriteToken: h.writeToken,
+		Stations:   stations,
+		Mappings:   mappings,
 	}
 	if err := h.renderPage(w, "templates/mappings.gohtml", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (h *Handler) isValidWriteToken(value string) bool {
+	return h.writeToken != "" && value == h.writeToken
 }
 
 func parsePositiveInt(value string) (int, error) {

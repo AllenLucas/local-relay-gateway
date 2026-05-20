@@ -14,6 +14,8 @@ import (
 	sqlitestore "relay-gateway/internal/storage/sqlite"
 )
 
+const adminWriteToken = "admin-write-token"
+
 func TestStationsPageRendersSavedStations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "gateway.db")
 	store, err := sqlitestore.NewStore(dbPath)
@@ -44,7 +46,7 @@ func TestStationsPageRendersSavedStations(t *testing.T) {
 		Enabled:       true,
 	})
 
-	handler, err := admin.NewHandler(store)
+	handler, err := admin.NewHandler(store, adminWriteToken)
 	if err != nil {
 		t.Fatalf("NewHandler error = %v", err)
 	}
@@ -58,6 +60,9 @@ func TestStationsPageRendersSavedStations(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "station-a") {
 		t.Fatalf("body did not contain station name: %s", recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `value="`+adminWriteToken+`"`) {
+		t.Fatalf("body did not contain write token: %s", recorder.Body.String())
 	}
 	if strings.Contains(recorder.Body.String(), `/admin/status`) {
 		t.Fatalf("body unexpectedly contained status link: %s", recorder.Body.String())
@@ -101,12 +106,13 @@ func TestMappingCreatePostRedirectsBackToPage(t *testing.T) {
 		AnthropicAPIKey:              "ANTHROPIC_A",
 	})
 
-	handler, err := admin.NewHandler(store)
+	handler, err := admin.NewHandler(store, adminWriteToken)
 	if err != nil {
 		t.Fatalf("NewHandler error = %v", err)
 	}
 
 	form := url.Values{
+		"write_token":    []string{adminWriteToken},
 		"station_id":     []string{`1`},
 		"protocol":       []string{`openai`},
 		"alias":          []string{`gpt-5`},
@@ -144,7 +150,7 @@ func TestAdminRootWithTrailingSlashRedirectsToStations(t *testing.T) {
 	}
 	defer store.Close()
 
-	handler, err := admin.NewHandler(store)
+	handler, err := admin.NewHandler(store, adminWriteToken)
 	if err != nil {
 		t.Fatalf("NewHandler error = %v", err)
 	}
@@ -169,12 +175,13 @@ func TestStationCreatePostRejectsMalformedNumericFields(t *testing.T) {
 	}
 	defer store.Close()
 
-	handler, err := admin.NewHandler(store)
+	handler, err := admin.NewHandler(store, adminWriteToken)
 	if err != nil {
 		t.Fatalf("NewHandler error = %v", err)
 	}
 
 	form := url.Values{
+		"write_token":                    []string{adminWriteToken},
 		"name":                           []string{"station-a"},
 		"enabled":                        []string{"on"},
 		"priority":                       []string{"oops"},
@@ -242,12 +249,13 @@ func TestMappingCreatePostRejectsInvalidStationIDs(t *testing.T) {
 				t.Fatalf("CreateStation error = %v", err)
 			}
 
-			handler, err := admin.NewHandler(store)
+			handler, err := admin.NewHandler(store, adminWriteToken)
 			if err != nil {
 				t.Fatalf("NewHandler error = %v", err)
 			}
 
 			form := url.Values{
+				"write_token":    []string{adminWriteToken},
 				"station_id":     []string{tc.stationID},
 				"protocol":       []string{"openai"},
 				"alias":          []string{"gpt-5"},
@@ -286,12 +294,13 @@ func TestMappingCreatePostPersistsUncheckedMappingAsDisabled(t *testing.T) {
 		t.Fatalf("CreateStation error = %v", err)
 	}
 
-	handler, err := admin.NewHandler(store)
+	handler, err := admin.NewHandler(store, adminWriteToken)
 	if err != nil {
 		t.Fatalf("NewHandler error = %v", err)
 	}
 
 	form := url.Values{
+		"write_token":    []string{adminWriteToken},
 		"station_id":     []string{`1`},
 		"protocol":       []string{`openai`},
 		"alias":          []string{`gpt-5`},
@@ -340,7 +349,7 @@ func TestStationCreatePostRejectsNonPositiveNumericFields(t *testing.T) {
 			}
 			defer store.Close()
 
-			handler, err := admin.NewHandler(store)
+			handler, err := admin.NewHandler(store, adminWriteToken)
 			if err != nil {
 				t.Fatalf("NewHandler error = %v", err)
 			}
@@ -390,7 +399,7 @@ func TestStationCreatePostRejectsBlankRequiredFields(t *testing.T) {
 			}
 			defer store.Close()
 
-			handler, err := admin.NewHandler(store)
+			handler, err := admin.NewHandler(store, adminWriteToken)
 			if err != nil {
 				t.Fatalf("NewHandler error = %v", err)
 			}
@@ -442,7 +451,7 @@ func TestMappingCreatePostRejectsBlankRequiredFields(t *testing.T) {
 				t.Fatalf("CreateStation error = %v", err)
 			}
 
-			handler, err := admin.NewHandler(store)
+			handler, err := admin.NewHandler(store, adminWriteToken)
 			if err != nil {
 				t.Fatalf("NewHandler error = %v", err)
 			}
@@ -489,6 +498,7 @@ func createAdminTestStation(store *sqlitestore.Store, name string) (int64, error
 
 func validStationForm() url.Values {
 	return url.Values{
+		"write_token":                    []string{adminWriteToken},
 		"name":                           []string{"station-a"},
 		"enabled":                        []string{"on"},
 		"priority":                       []string{"20"},
@@ -506,10 +516,115 @@ func validStationForm() url.Values {
 
 func validMappingForm(stationID string) url.Values {
 	return url.Values{
+		"write_token":    []string{adminWriteToken},
 		"station_id":     []string{stationID},
 		"protocol":       []string{"openai"},
 		"alias":          []string{"gpt-5"},
 		"upstream_model": []string{"gpt-5.1"},
 		"enabled":        []string{"on"},
+	}
+}
+
+func TestStationCreatePostRejectsMissingOrInvalidWriteToken(t *testing.T) {
+	testCases := []struct {
+		name  string
+		value string
+	}{
+		{name: "missing", value: ""},
+		{name: "invalid", value: "wrong-token"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "gateway.db")
+			store, err := sqlitestore.NewStore(dbPath)
+			if err != nil {
+				t.Fatalf("NewStore error = %v", err)
+			}
+			defer store.Close()
+
+			handler, err := admin.NewHandler(store, adminWriteToken)
+			if err != nil {
+				t.Fatalf("NewHandler error = %v", err)
+			}
+
+			form := validStationForm()
+			if tc.value == "" {
+				form.Del("write_token")
+			} else {
+				form.Set("write_token", tc.value)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/admin/stations", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+
+			if recorder.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
+			}
+
+			stations, err := store.ListStations(context.Background())
+			if err != nil {
+				t.Fatalf("ListStations error = %v", err)
+			}
+			if len(stations) != 0 {
+				t.Fatalf("len(stations) = %d, want 0", len(stations))
+			}
+		})
+	}
+}
+
+func TestMappingCreatePostRejectsMissingOrInvalidWriteToken(t *testing.T) {
+	testCases := []struct {
+		name  string
+		value string
+	}{
+		{name: "missing", value: ""},
+		{name: "invalid", value: "wrong-token"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "gateway.db")
+			store, err := sqlitestore.NewStore(dbPath)
+			if err != nil {
+				t.Fatalf("NewStore error = %v", err)
+			}
+			defer store.Close()
+
+			if _, err := createAdminTestStation(store, "station-a"); err != nil {
+				t.Fatalf("CreateStation error = %v", err)
+			}
+
+			handler, err := admin.NewHandler(store, adminWriteToken)
+			if err != nil {
+				t.Fatalf("NewHandler error = %v", err)
+			}
+
+			form := validMappingForm("1")
+			if tc.value == "" {
+				form.Del("write_token")
+			} else {
+				form.Set("write_token", tc.value)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/admin/mappings", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+
+			if recorder.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
+			}
+
+			mappings, err := store.ListMappings(context.Background())
+			if err != nil {
+				t.Fatalf("ListMappings error = %v", err)
+			}
+			if len(mappings) != 0 {
+				t.Fatalf("len(mappings) = %d, want 0", len(mappings))
+			}
+		})
 	}
 }

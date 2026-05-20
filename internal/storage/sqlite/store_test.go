@@ -114,3 +114,33 @@ func TestStorePersistsStationsAndMappings(t *testing.T) {
 		t.Fatal("FindMappings with invalid protocol error = nil, want non-nil")
 	}
 }
+
+func TestUpsertModelMappingRejectsUnknownStationID(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	err = store.UpsertModelMapping(ctx, core.ModelMapping{
+		StationID:     999,
+		Protocol:      core.ProtocolOpenAI,
+		Alias:         "gpt-5",
+		UpstreamModel: "gpt-5.1",
+		Enabled:       true,
+	})
+	if err == nil {
+		t.Fatal("UpsertModelMapping error = nil, want non-nil")
+	}
+
+	mappings, err := store.ListMappings(ctx)
+	if err != nil {
+		t.Fatalf("ListMappings error = %v", err)
+	}
+	if len(mappings) != 0 {
+		t.Fatalf("len(mappings) = %d, want 0", len(mappings))
+	}
+}

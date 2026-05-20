@@ -1,6 +1,7 @@
 {{define "content"}}
 <h1>Mappings</h1>
 <form method="post" action="/admin/mappings" style="margin: 16px 0 24px 0; display: grid; gap: 8px; max-width: 640px;">
+  <input type="hidden" name="write_token" value="{{.WriteToken}}">
   <select name="station_id" required>
     <option value="">Select station</option>
     {{range .Stations}}

@@ -1,6 +1,7 @@
 {{define "content"}}
 <h1>Stations</h1>
 <form method="post" action="/admin/stations" style="margin: 16px 0 24px 0; display: grid; gap: 8px; max-width: 960px;">
+  <input type="hidden" name="write_token" value="{{.WriteToken}}">
   <input name="name" placeholder="Station name" required>
   <label><input type="checkbox" name="enabled" checked> Enabled</label>
   <input name="priority" type="number" value="10" placeholder="Priority">
