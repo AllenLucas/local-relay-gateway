@@ -121,6 +121,10 @@ func (s *Store) UpsertModelMapping(ctx context.Context, mapping core.ModelMappin
 }
 
 func (s *Store) FindMappings(ctx context.Context, protocol core.Protocol, alias string) ([]core.ModelMapping, error) {
+	if !isSupportedProtocol(protocol) {
+		return nil, fmt.Errorf("unsupported protocol: %q", protocol)
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
         SELECT id, station_id, protocol, alias, upstream_model, enabled
         FROM model_mappings

@@ -108,4 +108,9 @@ func TestStorePersistsStationsAndMappings(t *testing.T) {
 	if err == nil {
 		t.Fatal("UpsertModelMapping with invalid protocol error = nil, want non-nil")
 	}
+
+	_, err = store.FindMappings(ctx, core.Protocol("invalid"), "bad-model")
+	if err == nil {
+		t.Fatal("FindMappings with invalid protocol error = nil, want non-nil")
+	}
 }
