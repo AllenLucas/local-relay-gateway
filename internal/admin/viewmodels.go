@@ -14,3 +14,17 @@ type MappingsPage struct {
 	Stations   []core.Station
 	Mappings   []core.ModelMapping
 }
+
+type StatusPage struct {
+	Title    string
+	Stations []core.Station
+	Statuses map[int64]core.StationStatus
+}
+
+type LogsPage struct {
+	Title          string
+	RequestLogs    []core.RequestLog
+	FailoverEvents []core.FailoverEvent
+	UsageByStation []core.UsageRow
+	UsageByAlias   []core.UsageRow
+}

@@ -83,3 +83,10 @@ type FailoverEvent struct {
 	Reason          string
 	CreatedAt       time.Time
 }
+
+type UsageRow struct {
+	StationName  string
+	Alias        string
+	RequestCount int
+	ErrorCount   int
+}

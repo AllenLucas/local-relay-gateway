@@ -1,0 +1,121 @@
+{{define "content"}}
+<h1>Logs And Statistics</h1>
+
+<h2>Recent Requests</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Protocol</th>
+      <th>Alias</th>
+      <th>Station</th>
+      <th>Status</th>
+      <th>Duration (ms)</th>
+      <th>Stream</th>
+      <th>Failover</th>
+      <th>Error Kind</th>
+      <th>Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .RequestLogs}}
+    <tr>
+      <td>{{.Protocol}}</td>
+      <td>{{.Alias}}</td>
+      <td>{{.StationName}}</td>
+      <td>{{.StatusCode}}</td>
+      <td>{{.DurationMS}}</td>
+      <td>{{.WasStream}}</td>
+      <td>{{.DidFailover}}</td>
+      <td>{{.ErrorKind}}</td>
+      <td>{{.CreatedAt}}</td>
+    </tr>
+    {{else}}
+    <tr>
+      <td colspan="9">No request logs recorded yet.</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+
+<h2>Failover Events</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Protocol</th>
+      <th>Alias</th>
+      <th>From</th>
+      <th>To</th>
+      <th>Reason</th>
+      <th>Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .FailoverEvents}}
+    <tr>
+      <td>{{.Protocol}}</td>
+      <td>{{.Alias}}</td>
+      <td>{{.FromStationName}}</td>
+      <td>{{.ToStationName}}</td>
+      <td>{{.Reason}}</td>
+      <td>{{.CreatedAt}}</td>
+    </tr>
+    {{else}}
+    <tr>
+      <td colspan="6">No failover events recorded yet.</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+
+<h2>Usage By Station</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Station</th>
+      <th>Alias</th>
+      <th>Requests</th>
+      <th>Errors</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .UsageByStation}}
+    <tr>
+      <td>{{.StationName}}</td>
+      <td>{{.Alias}}</td>
+      <td>{{.RequestCount}}</td>
+      <td>{{.ErrorCount}}</td>
+    </tr>
+    {{else}}
+    <tr>
+      <td colspan="4">No usage data available.</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+
+<h2>Usage By Alias</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Alias</th>
+      <th>Station</th>
+      <th>Requests</th>
+      <th>Errors</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .UsageByAlias}}
+    <tr>
+      <td>{{.Alias}}</td>
+      <td>{{.StationName}}</td>
+      <td>{{.RequestCount}}</td>
+      <td>{{.ErrorCount}}</td>
+    </tr>
+    {{else}}
+    <tr>
+      <td colspan="4">No alias usage data available.</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"relay-gateway/internal/core"
 	sqlitestore "relay-gateway/internal/storage/sqlite"
@@ -142,5 +143,69 @@ func TestUpsertModelMappingRejectsUnknownStationID(t *testing.T) {
 	}
 	if len(mappings) != 0 {
 		t.Fatalf("len(mappings) = %d, want 0", len(mappings))
+	}
+}
+
+func TestStoreSummarizesUsageAndPrunesOldLogs(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Now().UTC()
+	cutoff := now.Add(-24 * time.Hour)
+
+	err = store.InsertRequestLog(ctx, core.RequestLog{
+		Protocol:    core.ProtocolOpenAI,
+		Alias:       "gpt-5",
+		StationName: "station-a",
+		StatusCode:  500,
+		DurationMS:  123,
+		ErrorKind:   "upstream_error",
+		CreatedAt:   cutoff.Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("InsertRequestLog old error = %v", err)
+	}
+
+	err = store.InsertRequestLog(ctx, core.RequestLog{
+		Protocol:    core.ProtocolOpenAI,
+		Alias:       "gpt-5",
+		StationName: "station-b",
+		StatusCode:  200,
+		DurationMS:  45,
+		CreatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("InsertRequestLog current error = %v", err)
+	}
+
+	err = store.DeleteRequestLogsBefore(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("DeleteRequestLogsBefore error = %v", err)
+	}
+
+	rows, err := store.UsageByStation(ctx)
+	if err != nil {
+		t.Fatalf("UsageByStation error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	}
+	if rows[0].StationName != "station-b" {
+		t.Fatalf("StationName = %q, want %q", rows[0].StationName, "station-b")
+	}
+	if rows[0].Alias != "gpt-5" {
+		t.Fatalf("Alias = %q, want %q", rows[0].Alias, "gpt-5")
+	}
+	if rows[0].RequestCount != 1 {
+		t.Fatalf("RequestCount = %d, want 1", rows[0].RequestCount)
+	}
+	if rows[0].ErrorCount != 0 {
+		t.Fatalf("ErrorCount = %d, want 0", rows[0].ErrorCount)
 	}
 }

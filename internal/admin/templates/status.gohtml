@@ -1,0 +1,32 @@
+{{define "content"}}
+<h1>Live Status</h1>
+<table>
+  <thead>
+    <tr>
+      <th>Station</th>
+      <th>State</th>
+      <th>Cooldown Until</th>
+      <th>Failures</th>
+      <th>Recoveries</th>
+      <th>Last Error</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Stations}}
+    {{$status := index $.Statuses .ID}}
+    <tr>
+      <td>{{.Name}}</td>
+      <td>{{$status.State}}</td>
+      <td>{{$status.CooldownUntil}}</td>
+      <td>{{$status.ConsecutiveFailures}}</td>
+      <td>{{$status.ConsecutiveRecoveries}}</td>
+      <td>{{$status.LastError}}</td>
+    </tr>
+    {{else}}
+    <tr>
+      <td colspan="6">No stations configured yet.</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}

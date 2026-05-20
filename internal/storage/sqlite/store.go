@@ -222,6 +222,211 @@ func (s *Store) SaveStationStatus(ctx context.Context, status core.StationStatus
 	return err
 }
 
+func (s *Store) ListStationStatuses(ctx context.Context) (map[int64]core.StationStatus, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT station_id, state, cooldown_until, consecutive_failures,
+               consecutive_recoveries, last_error, last_checked_at
+        FROM station_statuses
+    `)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	statuses := make(map[int64]core.StationStatus)
+	for rows.Next() {
+		var status core.StationStatus
+		var cooldownUntil string
+		var lastCheckedAt string
+		if err := rows.Scan(
+			&status.StationID,
+			&status.State,
+			&cooldownUntil,
+			&status.ConsecutiveFailures,
+			&status.ConsecutiveRecoveries,
+			&status.LastError,
+			&lastCheckedAt,
+		); err != nil {
+			return nil, err
+		}
+		if cooldownUntil != "" {
+			status.CooldownUntil, _ = time.Parse(time.RFC3339, cooldownUntil)
+		}
+		if lastCheckedAt != "" {
+			status.LastCheckedAt, _ = time.Parse(time.RFC3339, lastCheckedAt)
+		}
+		statuses[status.StationID] = status
+	}
+	return statuses, rows.Err()
+}
+
+func (s *Store) InsertRequestLog(ctx context.Context, entry core.RequestLog) error {
+	_, err := s.db.ExecContext(ctx, `
+        INSERT INTO request_logs (
+            protocol, alias, station_name, status_code, duration_ms,
+            was_stream, did_failover, error_kind, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+		string(entry.Protocol),
+		entry.Alias,
+		entry.StationName,
+		entry.StatusCode,
+		entry.DurationMS,
+		boolToInt(entry.WasStream),
+		boolToInt(entry.DidFailover),
+		entry.ErrorKind,
+		entry.CreatedAt.Format(time.RFC3339),
+	)
+	return err
+}
+
+func (s *Store) DeleteRequestLogsBefore(ctx context.Context, cutoff time.Time) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM request_logs WHERE created_at < ?`, cutoff.Format(time.RFC3339))
+	return err
+}
+
+func (s *Store) ListRequestLogs(ctx context.Context, limit int) ([]core.RequestLog, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT id, protocol, alias, station_name, status_code, duration_ms,
+               was_stream, did_failover, error_kind, created_at
+        FROM request_logs
+        ORDER BY created_at DESC
+        LIMIT ?
+    `, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []core.RequestLog
+	for rows.Next() {
+		var item core.RequestLog
+		var protocolValue string
+		var wasStream int
+		var didFailover int
+		var createdAt string
+		if err := rows.Scan(
+			&item.ID,
+			&protocolValue,
+			&item.Alias,
+			&item.StationName,
+			&item.StatusCode,
+			&item.DurationMS,
+			&wasStream,
+			&didFailover,
+			&item.ErrorKind,
+			&createdAt,
+		); err != nil {
+			return nil, err
+		}
+		item.Protocol = core.Protocol(protocolValue)
+		item.WasStream = wasStream == 1
+		item.DidFailover = didFailover == 1
+		item.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		logs = append(logs, item)
+	}
+	return logs, rows.Err()
+}
+
+func (s *Store) InsertFailoverEvent(ctx context.Context, event core.FailoverEvent) error {
+	_, err := s.db.ExecContext(ctx, `
+        INSERT INTO failover_events (
+            protocol, alias, from_station_name, to_station_name, reason, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+    `,
+		string(event.Protocol),
+		event.Alias,
+		event.FromStationName,
+		event.ToStationName,
+		event.Reason,
+		event.CreatedAt.Format(time.RFC3339),
+	)
+	return err
+}
+
+func (s *Store) ListFailoverEvents(ctx context.Context, limit int) ([]core.FailoverEvent, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT id, protocol, alias, from_station_name, to_station_name, reason, created_at
+        FROM failover_events
+        ORDER BY created_at DESC
+        LIMIT ?
+    `, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []core.FailoverEvent
+	for rows.Next() {
+		var item core.FailoverEvent
+		var protocolValue string
+		var createdAt string
+		if err := rows.Scan(
+			&item.ID,
+			&protocolValue,
+			&item.Alias,
+			&item.FromStationName,
+			&item.ToStationName,
+			&item.Reason,
+			&createdAt,
+		); err != nil {
+			return nil, err
+		}
+		item.Protocol = core.Protocol(protocolValue)
+		item.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		events = append(events, item)
+	}
+	return events, rows.Err()
+}
+
+func (s *Store) UsageByStation(ctx context.Context) ([]core.UsageRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT station_name, alias, COUNT(*) AS request_count,
+               SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS error_count
+        FROM request_logs
+        GROUP BY station_name, alias
+        ORDER BY request_count DESC, station_name ASC
+    `)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []core.UsageRow
+	for rows.Next() {
+		var row core.UsageRow
+		if err := rows.Scan(&row.StationName, &row.Alias, &row.RequestCount, &row.ErrorCount); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UsageByAlias(ctx context.Context) ([]core.UsageRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT station_name, alias, COUNT(*) AS request_count,
+               SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS error_count
+        FROM request_logs
+        GROUP BY alias, station_name
+        ORDER BY alias ASC, request_count DESC
+    `)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []core.UsageRow
+	for rows.Next() {
+		var row core.UsageRow
+		if err := rows.Scan(&row.StationName, &row.Alias, &row.RequestCount, &row.ErrorCount); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 func boolToInt(value bool) int {
 	if value {
 		return 1

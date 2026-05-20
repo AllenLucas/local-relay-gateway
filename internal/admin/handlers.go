@@ -21,6 +21,11 @@ type store interface {
 	ListStations(ctx context.Context) ([]core.Station, error)
 	ListMappings(ctx context.Context) ([]core.ModelMapping, error)
 	UpsertModelMapping(ctx context.Context, mapping core.ModelMapping) error
+	ListStationStatuses(ctx context.Context) (map[int64]core.StationStatus, error)
+	ListRequestLogs(ctx context.Context, limit int) ([]core.RequestLog, error)
+	ListFailoverEvents(ctx context.Context, limit int) ([]core.FailoverEvent, error)
+	UsageByStation(ctx context.Context) ([]core.UsageRow, error)
+	UsageByAlias(ctx context.Context) ([]core.UsageRow, error)
 }
 
 type Handler struct {
@@ -46,6 +51,8 @@ func NewHandler(store store, writeToken string) (http.Handler, error) {
 	mux.HandleFunc("/admin/", handler.handleRoot)
 	mux.HandleFunc("/admin/stations", handler.handleStations)
 	mux.HandleFunc("/admin/mappings", handler.handleMappings)
+	mux.HandleFunc("/admin/status", handler.handleStatus)
+	mux.HandleFunc("/admin/logs", handler.handleLogs)
 	mux.Handle("/admin/assets/", handler.staticRoot)
 	return mux, nil
 }
@@ -243,6 +250,62 @@ func (h *Handler) handleMappings(w http.ResponseWriter, r *http.Request) {
 		Mappings:   mappings,
 	}
 	if err := h.renderPage(w, "templates/mappings.gohtml", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
+	stations, err := h.store.ListStations(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	statuses, err := h.store.ListStationStatuses(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := StatusPage{
+		Title:    "Status",
+		Stations: stations,
+		Statuses: statuses,
+	}
+	if err := h.renderPage(w, "templates/status.gohtml", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request) {
+	requestLogs, err := h.store.ListRequestLogs(r.Context(), 50)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	failoverEvents, err := h.store.ListFailoverEvents(r.Context(), 50)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	usageByStation, err := h.store.UsageByStation(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	usageByAlias, err := h.store.UsageByAlias(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := LogsPage{
+		Title:          "Logs",
+		RequestLogs:    requestLogs,
+		FailoverEvents: failoverEvents,
+		UsageByStation: usageByStation,
+		UsageByAlias:   usageByAlias,
+	}
+	if err := h.renderPage(w, "templates/logs.gohtml", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
