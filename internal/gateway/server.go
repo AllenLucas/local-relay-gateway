@@ -29,7 +29,11 @@ func NewServer(cfg config.Runtime, store store, selector *routing.Selector) http
 		cfg:      cfg,
 		store:    store,
 		selector: selector,
-		client:   &http.Client{Timeout: 15 * time.Second},
+		client: &http.Client{
+			Transport: &http.Transport{
+				ResponseHeaderTimeout: 15 * time.Second,
+			},
+		},
 	}
 
 	mux := http.NewServeMux()

@@ -3,6 +3,7 @@ package openai
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -17,7 +18,10 @@ func NormalizeResponses(r *http.Request) (core.NormalizedRequest, error) {
 		return core.NormalizedRequest{}, err
 	}
 
-	alias, _ := body["model"].(string)
+	alias, ok := body["model"].(string)
+	if !ok || strings.TrimSpace(alias) == "" {
+		return core.NormalizedRequest{}, errors.New("model is required")
+	}
 	stream, _ := body["stream"].(bool)
 
 	return core.NormalizedRequest{
