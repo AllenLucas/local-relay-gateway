@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"relay-gateway/internal/core"
 )
@@ -66,39 +67,65 @@ func (h *Handler) handleStations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		priority, err := parseRequiredInt(r.Form.Get("priority"))
+		name, err := parseRequiredText(r.Form.Get("name"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		cooldownSeconds, err := parseRequiredInt(r.Form.Get("cooldown_seconds"))
+		openAIBaseURL, err := parseRequiredText(r.Form.Get("openai_base_url"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		healthInterval, err := parseRequiredInt(r.Form.Get("health_check_interval_seconds"))
+		openAIAPIKey, err := parseRequiredText(r.Form.Get("openai_api_key"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		healthTimeout, err := parseRequiredInt(r.Form.Get("health_check_timeout_seconds"))
+		anthropicBaseURL, err := parseRequiredText(r.Form.Get("anthropic_base_url"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		failureThreshold, err := parseRequiredInt(r.Form.Get("consecutive_failure_threshold"))
+		anthropicAPIKey, err := parseRequiredText(r.Form.Get("anthropic_api_key"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		recoveryThreshold, err := parseRequiredInt(r.Form.Get("consecutive_recovery_threshold"))
+
+		priority, err := parsePositiveInt(r.Form.Get("priority"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		cooldownSeconds, err := parsePositiveInt(r.Form.Get("cooldown_seconds"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		healthInterval, err := parsePositiveInt(r.Form.Get("health_check_interval_seconds"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		healthTimeout, err := parsePositiveInt(r.Form.Get("health_check_timeout_seconds"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		failureThreshold, err := parsePositiveInt(r.Form.Get("consecutive_failure_threshold"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		recoveryThreshold, err := parsePositiveInt(r.Form.Get("consecutive_recovery_threshold"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		_, err = h.store.CreateStation(r.Context(), core.Station{
-			Name:                         r.Form.Get("name"),
+			Name:                         name,
 			Enabled:                      r.Form.Get("enabled") == "on",
 			Priority:                     priority,
 			CooldownSeconds:              cooldownSeconds,
@@ -106,10 +133,10 @@ func (h *Handler) handleStations(w http.ResponseWriter, r *http.Request) {
 			HealthCheckTimeoutSeconds:    healthTimeout,
 			ConsecutiveFailureThreshold:  failureThreshold,
 			ConsecutiveRecoveryThreshold: recoveryThreshold,
-			OpenAIBaseURL:                r.Form.Get("openai_base_url"),
-			OpenAIAPIKey:                 r.Form.Get("openai_api_key"),
-			AnthropicBaseURL:             r.Form.Get("anthropic_base_url"),
-			AnthropicAPIKey:              r.Form.Get("anthropic_api_key"),
+			OpenAIBaseURL:                openAIBaseURL,
+			OpenAIAPIKey:                 openAIAPIKey,
+			AnthropicBaseURL:             anthropicBaseURL,
+			AnthropicAPIKey:              anthropicAPIKey,
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -141,7 +168,23 @@ func (h *Handler) handleMappings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		stationID, err := strconv.ParseInt(r.Form.Get("station_id"), 10, 64)
+		protocol, err := parseRequiredText(r.Form.Get("protocol"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		alias, err := parseRequiredText(r.Form.Get("alias"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		upstreamModel, err := parseRequiredText(r.Form.Get("upstream_model"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		stationID, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("station_id")), 10, 64)
 		if err != nil || stationID <= 0 {
 			http.Error(w, "invalid station_id", http.StatusBadRequest)
 			return
@@ -158,10 +201,10 @@ func (h *Handler) handleMappings(w http.ResponseWriter, r *http.Request) {
 
 		err = h.store.UpsertModelMapping(r.Context(), core.ModelMapping{
 			StationID:     stationID,
-			Protocol:      core.Protocol(r.Form.Get("protocol")),
-			Alias:         r.Form.Get("alias"),
-			UpstreamModel: r.Form.Get("upstream_model"),
-			Enabled:       r.Form.Get("enabled") != "off",
+			Protocol:      core.Protocol(protocol),
+			Alias:         alias,
+			UpstreamModel: upstreamModel,
+			Enabled:       r.Form.Get("enabled") == "on",
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -192,10 +235,13 @@ func (h *Handler) handleMappings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func parseRequiredInt(value string) (int, error) {
-	parsed, err := strconv.Atoi(value)
+func parsePositiveInt(value string) (int, error) {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil {
 		return 0, errors.New("invalid numeric input")
+	}
+	if parsed <= 0 {
+		return 0, errors.New("numeric input must be greater than zero")
 	}
 	return parsed, nil
 }
@@ -207,4 +253,12 @@ func stationExists(stations []core.Station, stationID int64) bool {
 		}
 	}
 	return false
+}
+
+func parseRequiredText(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", errors.New("required field is empty")
+	}
+	return trimmed, nil
 }
