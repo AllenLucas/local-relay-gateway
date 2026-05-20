@@ -59,6 +59,12 @@ func TestStationsPageRendersSavedStations(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), "station-a") {
 		t.Fatalf("body did not contain station name: %s", recorder.Body.String())
 	}
+	if strings.Contains(recorder.Body.String(), `/admin/status`) {
+		t.Fatalf("body unexpectedly contained status link: %s", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), `/admin/logs`) {
+		t.Fatalf("body unexpectedly contained logs link: %s", recorder.Body.String())
+	}
 
 	mappingReq := httptest.NewRequest(http.MethodGet, "/admin/mappings", nil)
 	mappingRecorder := httptest.NewRecorder()
@@ -127,5 +133,30 @@ func TestMappingCreatePostRedirectsBackToPage(t *testing.T) {
 	}
 	if mappings[0].StationID != stationID {
 		t.Fatalf("station id = %d, want %d", mappings[0].StationID, stationID)
+	}
+}
+
+func TestAdminRootWithTrailingSlashRedirectsToStations(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	handler, err := admin.NewHandler(store)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	if got := recorder.Header().Get("Location"); got != "/admin/stations" {
+		t.Fatalf("redirect location = %q, want %q", got, "/admin/stations")
 	}
 }

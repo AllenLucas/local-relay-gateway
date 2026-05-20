@@ -14,7 +14,10 @@ import (
 )
 
 type store interface {
+	CreateStation(ctx context.Context, station core.Station) (int64, error)
 	ListStations(ctx context.Context) ([]core.Station, error)
+	ListMappings(ctx context.Context) ([]core.ModelMapping, error)
+	UpsertModelMapping(ctx context.Context, mapping core.ModelMapping) error
 	FindMappings(ctx context.Context, protocol core.Protocol, alias string) ([]core.ModelMapping, error)
 }
 

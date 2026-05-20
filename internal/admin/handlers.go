@@ -39,6 +39,7 @@ func NewHandler(store store) (http.Handler, error) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/admin", handler.handleRoot)
+	mux.HandleFunc("/admin/", handler.handleRoot)
 	mux.HandleFunc("/admin/stations", handler.handleStations)
 	mux.HandleFunc("/admin/mappings", handler.handleMappings)
 	mux.Handle("/admin/assets/", handler.staticRoot)
