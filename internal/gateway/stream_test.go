@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"relay-gateway/internal/config"
 	"relay-gateway/internal/core"
@@ -114,6 +115,97 @@ func TestStreamDoesNotSwitchAfterFirstChunk(t *testing.T) {
 	}
 	if firstCalls != 1 {
 		t.Fatalf("firstCalls = %d, want 1", firstCalls)
+	}
+}
+
+func TestStreamCopyFailureDoesNotPersistHealthyStatus(t *testing.T) {
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("response writer does not support hijacking")
+		}
+
+		conn, buf, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatalf("Hijack error = %v", err)
+		}
+		defer conn.Close()
+
+		if _, err := buf.WriteString(
+			"HTTP/1.1 200 OK\r\n" +
+				"Content-Type: text/event-stream\r\n" +
+				"Content-Length: 999\r\n" +
+				"Connection: close\r\n\r\n" +
+				"data: first\n\n",
+		); err != nil {
+			t.Fatalf("WriteString error = %v", err)
+		}
+		if err := buf.Flush(); err != nil {
+			t.Fatalf("Flush error = %v", err)
+		}
+	}))
+	defer first.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Fatalf("Close error = %v", closeErr)
+		}
+	}()
+
+	ctx := context.Background()
+	firstID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "station-a",
+		Enabled:                      true,
+		Priority:                     20,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                first.URL,
+		OpenAIAPIKey:                 "OPENAI_A",
+		AnthropicBaseURL:             first.URL,
+		AnthropicAPIKey:              "ANTHROPIC_A",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation first error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{
+		StationID:     firstID,
+		Protocol:      core.ProtocolOpenAI,
+		Alias:         "gpt-5",
+		UpstreamModel: "gpt-5",
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("UpsertModelMapping first error = %v", err)
+	}
+
+	handler := gateway.NewServer(config.Runtime{LocalAPIKey: "local-test-key"}, store, routing.NewSelector(func() time.Time {
+		return time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewReader([]byte(`{"model":"gpt-5","input":"hello","stream":true}`)))
+	req.Header.Set("Authorization", "Bearer local-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	writer := newFlushRecorder()
+	handler.ServeHTTP(writer, req)
+
+	statuses, err := store.ListStationStatuses(ctx)
+	if err != nil {
+		t.Fatalf("ListStationStatuses error = %v", err)
+	}
+	status, ok := statuses[firstID]
+	if !ok {
+		t.Fatal("missing persisted status for station-a")
+	}
+	if status.State != "cooldown" {
+		t.Fatalf("status.State = %q, want %q", status.State, "cooldown")
 	}
 }
 

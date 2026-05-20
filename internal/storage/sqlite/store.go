@@ -290,7 +290,7 @@ func (s *Store) ListRequestLogs(ctx context.Context, limit int) ([]core.RequestL
         SELECT id, protocol, alias, station_name, status_code, duration_ms,
                was_stream, did_failover, error_kind, created_at
         FROM request_logs
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, id DESC
         LIMIT ?
     `, limit)
 	if err != nil {
@@ -348,7 +348,7 @@ func (s *Store) ListFailoverEvents(ctx context.Context, limit int) ([]core.Failo
 	rows, err := s.db.QueryContext(ctx, `
         SELECT id, protocol, alias, from_station_name, to_station_name, reason, created_at
         FROM failover_events
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, id DESC
         LIMIT ?
     `, limit)
 	if err != nil {

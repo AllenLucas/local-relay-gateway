@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"relay-gateway/internal/config"
 	"relay-gateway/internal/core"
@@ -194,6 +195,94 @@ func TestResponsesHandlerReturnsBadGatewayWhenAllUpstreamsFail(t *testing.T) {
 	}
 }
 
+func TestResponsesHandlerDoesNotPersistFailureOnCanceledClient(t *testing.T) {
+	upstreamCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		http.Error(w, "should not be reached", http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	}()
+
+	ctx := context.Background()
+	stationID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "station-a",
+		Enabled:                      true,
+		Priority:                     20,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                upstream.URL,
+		OpenAIAPIKey:                 "OPENAI_A",
+		AnthropicBaseURL:             upstream.URL,
+		AnthropicAPIKey:              "ANTHROPIC_A",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{
+		StationID:     stationID,
+		Protocol:      core.ProtocolOpenAI,
+		Alias:         "gpt-5",
+		UpstreamModel: "gpt-5",
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("UpsertModelMapping error = %v", err)
+	}
+
+	handler := gateway.NewServer(config.Runtime{LocalAPIKey: "local-test-key"}, store, routing.NewSelector(nil))
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewReader([]byte(`{"model":"gpt-5","input":"hello","stream":false}`))).WithContext(reqCtx)
+	req.Header.Set("Authorization", "Bearer local-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	statuses, err := store.ListStationStatuses(ctx)
+	if err != nil {
+		t.Fatalf("ListStationStatuses error = %v", err)
+	}
+	if len(statuses) != 0 {
+		t.Fatalf("len(statuses) = %d, want 0", len(statuses))
+	}
+
+	requestLogs, err := store.ListRequestLogs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListRequestLogs error = %v", err)
+	}
+	if len(requestLogs) != 0 {
+		t.Fatalf("len(requestLogs) = %d, want 0", len(requestLogs))
+	}
+
+	failoverEvents, err := store.ListFailoverEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListFailoverEvents error = %v", err)
+	}
+	if len(failoverEvents) != 0 {
+		t.Fatalf("len(failoverEvents) = %d, want 0", len(failoverEvents))
+	}
+
+	if upstreamCalls != 0 {
+		t.Fatalf("upstreamCalls = %d, want 0", upstreamCalls)
+	}
+}
+
 func TestResponsesHandlerProxiesSuccessfulResponseBodyAndHeader(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -290,6 +379,136 @@ func TestResponsesHandlerTrimsModelAliasBeforeRouting(t *testing.T) {
 	}
 	if got := recorder.Body.String(); got != `{"id":"resp_trimmed","status":"completed"}` {
 		t.Fatalf("body = %q", got)
+	}
+}
+
+func TestResponsesHandlerPersistsCooldownAndLogsFailoverUsage(t *testing.T) {
+	firstCalls := 0
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		http.Error(w, "overloaded", http.StatusTooManyRequests)
+	}))
+	defer first.Close()
+
+	secondCalls := 0
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_ok","status":"completed"}`))
+	}))
+	defer second.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	}()
+
+	ctx := context.Background()
+	firstID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "station-a",
+		Enabled:                      true,
+		Priority:                     20,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                first.URL,
+		OpenAIAPIKey:                 "OPENAI_A",
+		AnthropicBaseURL:             first.URL,
+		AnthropicAPIKey:              "ANTHROPIC_A",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation first error = %v", err)
+	}
+	secondID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "station-b",
+		Enabled:                      true,
+		Priority:                     10,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                second.URL,
+		OpenAIAPIKey:                 "OPENAI_B",
+		AnthropicBaseURL:             second.URL,
+		AnthropicAPIKey:              "ANTHROPIC_B",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation second error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{StationID: firstID, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true}); err != nil {
+		t.Fatalf("UpsertModelMapping first error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{StationID: secondID, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5.1", Enabled: true}); err != nil {
+		t.Fatalf("UpsertModelMapping second error = %v", err)
+	}
+
+	handler := gateway.NewServer(config.Runtime{LocalAPIKey: "local-test-key"}, store, routing.NewSelector(func() time.Time {
+		return time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	}))
+
+	firstRecorder := performResponsesRequest(handler, "local-test-key", []byte(`{"model":"gpt-5","input":"hello","stream":false}`))
+	if firstRecorder.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want %d", firstRecorder.Code, http.StatusOK)
+	}
+
+	statuses, err := store.ListStationStatuses(ctx)
+	if err != nil {
+		t.Fatalf("ListStationStatuses error = %v", err)
+	}
+	status, ok := statuses[firstID]
+	if !ok {
+		t.Fatal("missing persisted status for station-a")
+	}
+	if status.State != "cooldown" {
+		t.Fatalf("status.State = %q, want %q", status.State, "cooldown")
+	}
+
+	secondRecorder := performResponsesRequest(handler, "local-test-key", []byte(`{"model":"gpt-5","input":"again","stream":false}`))
+	if secondRecorder.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want %d", secondRecorder.Code, http.StatusOK)
+	}
+	if firstCalls != 1 {
+		t.Fatalf("firstCalls = %d, want 1", firstCalls)
+	}
+	if secondCalls != 2 {
+		t.Fatalf("secondCalls = %d, want 2", secondCalls)
+	}
+
+	requestLogs, err := store.ListRequestLogs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListRequestLogs error = %v", err)
+	}
+	if len(requestLogs) != 2 {
+		t.Fatalf("len(requestLogs) = %d, want 2", len(requestLogs))
+	}
+	if requestLogs[0].StationName != "station-b" || requestLogs[1].StationName != "station-b" {
+		t.Fatalf("request log stations = [%q, %q], want both station-b", requestLogs[0].StationName, requestLogs[1].StationName)
+	}
+	if !requestLogs[1].DidFailover {
+		t.Fatalf("first request DidFailover = %v, want true", requestLogs[1].DidFailover)
+	}
+	if requestLogs[0].DidFailover {
+		t.Fatalf("second request DidFailover = %v, want false", requestLogs[0].DidFailover)
+	}
+
+	failoverEvents, err := store.ListFailoverEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListFailoverEvents error = %v", err)
+	}
+	if len(failoverEvents) != 1 {
+		t.Fatalf("len(failoverEvents) = %d, want 1", len(failoverEvents))
+	}
+	if failoverEvents[0].FromStationName != "station-a" || failoverEvents[0].ToStationName != "station-b" {
+		t.Fatalf("failover event = %q -> %q, want station-a -> station-b", failoverEvents[0].FromStationName, failoverEvents[0].ToStationName)
 	}
 }
 

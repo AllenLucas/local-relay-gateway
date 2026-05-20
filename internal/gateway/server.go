@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -22,8 +23,11 @@ type store interface {
 	UpsertModelMapping(ctx context.Context, mapping core.ModelMapping) error
 	FindMappings(ctx context.Context, protocol core.Protocol, alias string) ([]core.ModelMapping, error)
 	ListStationStatuses(ctx context.Context) (map[int64]core.StationStatus, error)
+	SaveStationStatus(ctx context.Context, status core.StationStatus) error
 	ListRequestLogs(ctx context.Context, limit int) ([]core.RequestLog, error)
+	InsertRequestLog(ctx context.Context, entry core.RequestLog) error
 	ListFailoverEvents(ctx context.Context, limit int) ([]core.FailoverEvent, error)
+	InsertFailoverEvent(ctx context.Context, event core.FailoverEvent) error
 	UsageByStation(ctx context.Context) ([]core.UsageRow, error)
 	UsageByAlias(ctx context.Context) ([]core.UsageRow, error)
 }
@@ -69,6 +73,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	startedAt := time.Now().UTC()
 	stations, err := s.store.ListStations(ctx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -79,7 +84,12 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	targets, err := s.selector.Candidates(normalized, stations, mappings, map[int64]core.StationStatus{})
+	statuses, err := s.store.ListStationStatuses(ctx)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	targets, err := s.selector.Candidates(normalized, stations, mappings, statuses)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -87,7 +97,24 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 
 	// Failover is allowed only until the gateway commits headers to the client.
 	// Once response bytes have started, the stream belongs to that upstream.
+	var previous *core.ResolvedTarget
+	var attempted *core.ResolvedTarget
+	var didFailover bool
+	var errorKind string
 	for _, target := range targets {
+		attempted = &target
+		if previous != nil {
+			didFailover = true
+			_ = s.store.InsertFailoverEvent(ctx, core.FailoverEvent{
+				Protocol:        normalized.Protocol,
+				Alias:           normalized.Alias,
+				FromStationName: previous.Station.Name,
+				ToStationName:   target.Station.Name,
+				Reason:          errorKind,
+				CreatedAt:       time.Now().UTC(),
+			})
+		}
+
 		upstreamReq, err := openai.BuildResponsesRequest(target, normalized)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -95,11 +122,18 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 
 		resp, err := s.client.Do(upstreamReq.WithContext(ctx))
-		if err != nil {
-			continue
+		if err != nil && errors.Is(err, context.Canceled) {
+			return
 		}
-		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
-			_ = resp.Body.Close()
+		if err != nil || resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+			errorKind = failureKind(err, resp)
+			status := s.selector.RecordFailure(target.Station, statuses[target.Station.ID], failureMessage(err, resp))
+			statuses[target.Station.ID] = status
+			_ = s.store.SaveStationStatus(ctx, status)
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			previous = &target
 			continue
 		}
 
@@ -109,16 +143,34 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 			if _, err := io.Copy(w, resp.Body); err != nil {
 				flusher.Flush()
 				_ = resp.Body.Close()
+				status := s.selector.RecordFailure(target.Station, statuses[target.Station.ID], err.Error())
+				statuses[target.Station.ID] = status
+				_ = s.store.SaveStationStatus(ctx, status)
+				_ = s.store.InsertRequestLog(ctx, requestLog(normalized, target.Station.Name, resp.StatusCode, startedAt, didFailover, "stream_copy_error"))
 				return
 			}
 			flusher.Flush()
 		} else {
-			_, _ = io.Copy(w, resp.Body)
+			if _, err := io.Copy(w, resp.Body); err != nil {
+				_ = resp.Body.Close()
+				status := s.selector.RecordFailure(target.Station, statuses[target.Station.ID], err.Error())
+				statuses[target.Station.ID] = status
+				_ = s.store.SaveStationStatus(ctx, status)
+				_ = s.store.InsertRequestLog(ctx, requestLog(normalized, target.Station.Name, resp.StatusCode, startedAt, didFailover, "stream_copy_error"))
+				return
+			}
 		}
 		_ = resp.Body.Close()
+		status := s.selector.RecordSuccess(target.Station, statuses[target.Station.ID])
+		statuses[target.Station.ID] = status
+		_ = s.store.SaveStationStatus(ctx, status)
+		_ = s.store.InsertRequestLog(ctx, requestLog(normalized, target.Station.Name, resp.StatusCode, startedAt, didFailover, ""))
 		return
 	}
 
+	if attempted != nil {
+		_ = s.store.InsertRequestLog(ctx, requestLog(normalized, attempted.Station.Name, http.StatusBadGateway, startedAt, didFailover, errorKind))
+	}
 	http.Error(w, "all upstream stations failed", http.StatusBadGateway)
 }
 
@@ -139,4 +191,47 @@ func cloneDefaultTransport() *http.Transport {
 func deriveAdminWriteToken(localAPIKey string) string {
 	sum := sha256.Sum256([]byte("admin-write-token:" + localAPIKey))
 	return hex.EncodeToString(sum[:16])
+}
+
+func requestLog(req core.NormalizedRequest, stationName string, statusCode int, startedAt time.Time, didFailover bool, errorKind string) core.RequestLog {
+	return core.RequestLog{
+		Protocol:    req.Protocol,
+		Alias:       req.Alias,
+		StationName: stationName,
+		StatusCode:  statusCode,
+		DurationMS:  time.Since(startedAt).Milliseconds(),
+		WasStream:   req.Stream,
+		DidFailover: didFailover,
+		ErrorKind:   errorKind,
+		CreatedAt:   time.Now().UTC(),
+	}
+}
+
+func failureMessage(err error, resp *http.Response) string {
+	if err != nil {
+		return err.Error()
+	}
+	if resp != nil {
+		return resp.Status
+	}
+	return "upstream failure"
+}
+
+func failureKind(err error, resp *http.Response) string {
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return "timeout"
+		}
+		return "transport_error"
+	}
+	if resp == nil {
+		return "upstream_error"
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return "rate_limited"
+	}
+	if resp.StatusCode >= http.StatusInternalServerError {
+		return "upstream_error"
+	}
+	return "gateway_error"
 }
