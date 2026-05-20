@@ -68,6 +68,8 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Failover is allowed only until the gateway commits headers to the client.
+	// Once response bytes have started, the stream belongs to that upstream.
 	for _, target := range targets {
 		upstreamReq, err := openai.BuildResponsesRequest(target, normalized)
 		if err != nil {
@@ -86,7 +88,16 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 
 		copyHeader(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
+		if flusher, ok := w.(http.Flusher); ok {
+			if _, err := io.Copy(w, resp.Body); err != nil {
+				flusher.Flush()
+				_ = resp.Body.Close()
+				return
+			}
+			flusher.Flush()
+		} else {
+			_, _ = io.Copy(w, resp.Body)
+		}
 		_ = resp.Body.Close()
 		return
 	}
