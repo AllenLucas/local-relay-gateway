@@ -55,6 +55,9 @@ func TestStorePersistsStationsAndMappings(t *testing.T) {
 	if len(stations) != 1 {
 		t.Fatalf("len(stations) = %d, want 1", len(stations))
 	}
+	if !stations[0].Enabled {
+		t.Fatalf("stations[0].Enabled = %v, want true", stations[0].Enabled)
+	}
 
 	mappings, err := store.FindMappings(ctx, core.ProtocolOpenAI, "gpt-5")
 	if err != nil {
@@ -65,5 +68,44 @@ func TestStorePersistsStationsAndMappings(t *testing.T) {
 	}
 	if mappings[0].UpstreamModel != "gpt-5.1" {
 		t.Fatalf("UpstreamModel = %q, want %q", mappings[0].UpstreamModel, "gpt-5.1")
+	}
+	if !mappings[0].Enabled {
+		t.Fatalf("Enabled = %v, want true", mappings[0].Enabled)
+	}
+
+	err = store.UpsertModelMapping(ctx, core.ModelMapping{
+		StationID:     stationID,
+		Protocol:      core.ProtocolOpenAI,
+		Alias:         "gpt-5",
+		UpstreamModel: "gpt-5.2",
+		Enabled:       false,
+	})
+	if err != nil {
+		t.Fatalf("UpsertModelMapping update error = %v", err)
+	}
+
+	mappings, err = store.FindMappings(ctx, core.ProtocolOpenAI, "gpt-5")
+	if err != nil {
+		t.Fatalf("FindMappings after update error = %v", err)
+	}
+	if len(mappings) != 1 {
+		t.Fatalf("len(mappings) after update = %d, want 1", len(mappings))
+	}
+	if mappings[0].UpstreamModel != "gpt-5.2" {
+		t.Fatalf("UpstreamModel after update = %q, want %q", mappings[0].UpstreamModel, "gpt-5.2")
+	}
+	if mappings[0].Enabled {
+		t.Fatalf("Enabled after update = %v, want false", mappings[0].Enabled)
+	}
+
+	err = store.UpsertModelMapping(ctx, core.ModelMapping{
+		StationID:     stationID,
+		Protocol:      core.Protocol("invalid"),
+		Alias:         "bad-model",
+		UpstreamModel: "bad-model",
+		Enabled:       true,
+	})
+	if err == nil {
+		t.Fatal("UpsertModelMapping with invalid protocol error = nil, want non-nil")
 	}
 }

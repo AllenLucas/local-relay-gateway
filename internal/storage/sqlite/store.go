@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
 	"relay-gateway/internal/core"
@@ -100,6 +101,10 @@ func (s *Store) ListStations(ctx context.Context) ([]core.Station, error) {
 }
 
 func (s *Store) UpsertModelMapping(ctx context.Context, mapping core.ModelMapping) error {
+	if !isSupportedProtocol(mapping.Protocol) {
+		return fmt.Errorf("unsupported protocol: %q", mapping.Protocol)
+	}
+
 	_, err := s.db.ExecContext(ctx, `
         INSERT INTO model_mappings (station_id, protocol, alias, upstream_model, enabled)
         VALUES (?, ?, ?, ?, ?)
@@ -178,4 +183,13 @@ func boolToInt(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+func isSupportedProtocol(protocol core.Protocol) bool {
+	switch protocol {
+	case core.ProtocolOpenAI, core.ProtocolAnthropic:
+		return true
+	default:
+		return false
+	}
 }
