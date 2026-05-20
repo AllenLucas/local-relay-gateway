@@ -28,7 +28,7 @@ func (s *Selector) Candidates(
 ) ([]core.ResolvedTarget, error) {
 	mappingByStation := make(map[int64]core.ModelMapping, len(mappings))
 	for _, mapping := range mappings {
-		if mapping.Protocol != req.Protocol || mapping.Alias != req.Alias {
+		if !mapping.Enabled || mapping.Protocol != req.Protocol || mapping.Alias != req.Alias {
 			continue
 		}
 		mappingByStation[mapping.StationID] = mapping
@@ -42,7 +42,6 @@ func (s *Selector) Candidates(
 		return stations[i].Priority > stations[j].Priority
 	})
 
-	now := s.now()
 	targets := make([]core.ResolvedTarget, 0, len(stations))
 	for _, station := range stations {
 		if !station.Enabled {
@@ -55,7 +54,7 @@ func (s *Selector) Candidates(
 		}
 
 		status := statuses[station.ID]
-		if status.State == "cooldown" && status.CooldownUntil.After(now) {
+		if status.State != "" && status.State != "healthy" {
 			continue
 		}
 
@@ -85,12 +84,14 @@ func (s *Selector) RecordFailure(station core.Station, status core.StationStatus
 	now := s.now()
 
 	status.StationID = station.ID
-	status.State = "cooldown"
-	status.CooldownUntil = now.Add(time.Duration(station.CooldownSeconds) * time.Second)
 	status.ConsecutiveFailures++
 	status.ConsecutiveRecoveries = 0
 	status.LastError = message
 	status.LastCheckedAt = now
+	if failureThreshold(station) > 0 && status.ConsecutiveFailures >= failureThreshold(station) {
+		status.State = "cooldown"
+		status.CooldownUntil = now.Add(time.Duration(station.CooldownSeconds) * time.Second)
+	}
 
 	return status
 }
@@ -110,4 +111,12 @@ func (s *Selector) RecordSuccess(station core.Station, status core.StationStatus
 	}
 
 	return status
+}
+
+func failureThreshold(station core.Station) int {
+	if station.ConsecutiveFailureThreshold <= 0 {
+		return 1
+	}
+
+	return station.ConsecutiveFailureThreshold
 }
