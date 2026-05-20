@@ -12,6 +12,7 @@ import (
 	"relay-gateway/internal/admin"
 	"relay-gateway/internal/config"
 	"relay-gateway/internal/core"
+	"relay-gateway/internal/protocol/anthropic"
 	"relay-gateway/internal/protocol/openai"
 	"relay-gateway/internal/routing"
 )
@@ -39,6 +40,8 @@ type Server struct {
 	client   *http.Client
 }
 
+type requestBuilder func(target core.ResolvedTarget, normalized core.NormalizedRequest) (*http.Request, error)
+
 func NewServer(cfg config.Runtime, store store, selector *routing.Selector) http.Handler {
 	server := &Server{
 		cfg:      cfg,
@@ -51,6 +54,8 @@ func NewServer(cfg config.Runtime, store store, selector *routing.Selector) http
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/openai/v1/responses", server.handleResponses)
+	mux.HandleFunc("/openai/v1/chat/completions", server.handleChatCompletions)
+	mux.HandleFunc("/anthropic/v1/messages", server.handleAnthropicMessages)
 	adminHandler, err := admin.NewHandler(store, deriveAdminWriteToken(cfg.LocalAPIKey))
 	if err != nil {
 		panic(err)
@@ -61,17 +66,53 @@ func NewServer(cfg config.Runtime, store store, selector *routing.Selector) http
 }
 
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != "Bearer "+s.cfg.LocalAPIKey {
+	s.handleNormalizedRequest(w, r, core.ProtocolOpenAI, openai.NormalizeResponses, openai.BuildResponsesRequest)
+}
+
+func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	s.handleNormalizedRequest(w, r, core.ProtocolOpenAI, openai.NormalizeChatCompletions, openai.BuildChatCompletionsRequest)
+}
+
+func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
+	s.handleNormalizedRequest(w, r, core.ProtocolAnthropic, anthropic.NormalizeMessages, anthropic.BuildMessagesRequest)
+}
+
+func (s *Server) handleNormalizedRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	protocol core.Protocol,
+	normalize func(*http.Request) (core.NormalizedRequest, error),
+	build requestBuilder,
+) {
+	if !s.authorize(r, protocol) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	normalized, err := openai.NormalizeResponses(r)
+	normalized, err := normalize(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	s.proxyNormalizedRequest(w, r, normalized, build)
+}
+
+func (s *Server) authorize(r *http.Request, protocol core.Protocol) bool {
+	switch protocol {
+	case core.ProtocolAnthropic:
+		return r.Header.Get("x-api-key") == s.cfg.LocalAPIKey
+	default:
+		return r.Header.Get("Authorization") == "Bearer "+s.cfg.LocalAPIKey
+	}
+}
+
+func (s *Server) proxyNormalizedRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	normalized core.NormalizedRequest,
+	build requestBuilder,
+) {
 	ctx := r.Context()
 	startedAt := time.Now().UTC()
 	stations, err := s.store.ListStations(ctx)
@@ -79,7 +120,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	mappings, err := s.store.FindMappings(ctx, core.ProtocolOpenAI, normalized.Alias)
+	mappings, err := s.store.FindMappings(ctx, normalized.Protocol, normalized.Alias)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -115,7 +156,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 
-		upstreamReq, err := openai.BuildResponsesRequest(target, normalized)
+		upstreamReq, err := build(target, normalized)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -137,30 +178,14 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		copyHeader(w.Header(), resp.Header)
-		w.WriteHeader(resp.StatusCode)
-		if flusher, ok := w.(http.Flusher); ok {
-			if _, err := io.Copy(w, resp.Body); err != nil {
-				flusher.Flush()
-				_ = resp.Body.Close()
-				status := s.selector.RecordFailure(target.Station, statuses[target.Station.ID], err.Error())
-				statuses[target.Station.ID] = status
-				_ = s.store.SaveStationStatus(ctx, status)
-				_ = s.store.InsertRequestLog(ctx, requestLog(normalized, target.Station.Name, resp.StatusCode, startedAt, didFailover, "stream_copy_error"))
-				return
-			}
-			flusher.Flush()
-		} else {
-			if _, err := io.Copy(w, resp.Body); err != nil {
-				_ = resp.Body.Close()
-				status := s.selector.RecordFailure(target.Station, statuses[target.Station.ID], err.Error())
-				statuses[target.Station.ID] = status
-				_ = s.store.SaveStationStatus(ctx, status)
-				_ = s.store.InsertRequestLog(ctx, requestLog(normalized, target.Station.Name, resp.StatusCode, startedAt, didFailover, "stream_copy_error"))
-				return
-			}
+		if err := s.writeUpstreamResponse(w, resp); err != nil {
+			status := s.selector.RecordFailure(target.Station, statuses[target.Station.ID], err.Error())
+			statuses[target.Station.ID] = status
+			_ = s.store.SaveStationStatus(ctx, status)
+			_ = s.store.InsertRequestLog(ctx, requestLog(normalized, target.Station.Name, resp.StatusCode, startedAt, didFailover, "stream_copy_error"))
+			return
 		}
-		_ = resp.Body.Close()
+
 		status := s.selector.RecordSuccess(target.Station, statuses[target.Station.ID])
 		statuses[target.Station.ID] = status
 		_ = s.store.SaveStationStatus(ctx, status)
@@ -172,6 +197,25 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.InsertRequestLog(ctx, requestLog(normalized, attempted.Station.Name, http.StatusBadGateway, startedAt, didFailover, errorKind))
 	}
 	http.Error(w, "all upstream stations failed", http.StatusBadGateway)
+}
+
+func (s *Server) writeUpstreamResponse(w http.ResponseWriter, resp *http.Response) error {
+	copyHeader(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	if flusher, ok := w.(http.Flusher); ok {
+		if _, err := io.Copy(w, resp.Body); err != nil {
+			flusher.Flush()
+			_ = resp.Body.Close()
+			return err
+		}
+		flusher.Flush()
+	} else {
+		if _, err := io.Copy(w, resp.Body); err != nil {
+			_ = resp.Body.Close()
+			return err
+		}
+	}
+	return resp.Body.Close()
 }
 
 func copyHeader(dst http.Header, src http.Header) {
