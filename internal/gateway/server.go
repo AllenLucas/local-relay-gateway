@@ -53,8 +53,11 @@ type Options struct {
 	RuntimeWarning  string
 }
 
-func NewServer(input any, store store, selector *routing.Selector) http.Handler {
-	options := normalizeOptions(input)
+func NewServer(cfg config.Runtime, store store, selector *routing.Selector) http.Handler {
+	return NewServerWithOptions(Options{Runtime: cfg}, store, selector)
+}
+
+func NewServerWithOptions(options Options, store store, selector *routing.Selector) http.Handler {
 	server := &Server{
 		cfg:       options.Runtime,
 		setupMode: options.SetupMode,
@@ -86,17 +89,6 @@ func NewServer(input any, store store, selector *routing.Selector) http.Handler 
 	mux.Handle("/admin", adminHandler)
 	mux.Handle("/admin/", adminHandler)
 	return mux
-}
-
-func normalizeOptions(input any) Options {
-	switch value := input.(type) {
-	case Options:
-		return value
-	case config.Runtime:
-		return Options{Runtime: value}
-	default:
-		panic("gateway.NewServer requires gateway.Options or config.Runtime")
-	}
 }
 
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {

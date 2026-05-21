@@ -3,6 +3,9 @@
 {{if .Saved}}
 <p style="padding: 12px; background: #fff4d6; border: 1px solid #e7c76d;">Saved. Restart required before the new local key is used by relay endpoints.</p>
 {{end}}
+{{if .RuntimeError}}
+<p style="padding: 12px; background: #ffe8e8; border: 1px solid #d88a8a;">{{.RuntimeError}}</p>
+{{end}}
 <section style="margin: 16px 0 24px 0; display: grid; gap: 12px; max-width: 820px;">
   <p>Copy these local client endpoints. Runtime changes are written to disk, but this running process keeps using the current startup configuration until restart.</p>
   <label>

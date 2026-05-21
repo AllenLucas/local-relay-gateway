@@ -53,6 +53,7 @@ type RuntimePage struct {
 	OpenAIBaseURL   string
 	AnthropicURL    string
 	LocalAPIKey     string
+	RuntimeError    string
 	RuntimeFilePath string
 	Saved           bool
 }

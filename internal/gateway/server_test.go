@@ -194,7 +194,7 @@ func TestAnthropicHandlerAcceptsBearerAuthorization(t *testing.T) {
 		t.Fatalf("UpsertModelMapping error = %v", err)
 	}
 
-	handler := gateway.NewServer(gateway.Options{Runtime: config.Runtime{LocalAPIKey: "local-test-key"}}, store, routing.NewSelector(nil))
+	handler := gateway.NewServerWithOptions(gateway.Options{Runtime: config.Runtime{LocalAPIKey: "local-test-key"}}, store, routing.NewSelector(nil))
 
 	req := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", bytes.NewReader([]byte(`{"model":"claude-sonnet","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`)))
 	req.Header.Set("Authorization", "Bearer local-test-key")
@@ -322,7 +322,7 @@ func TestResponsesHandlerDoesNotPersistFailureOnCanceledClient(t *testing.T) {
 		t.Fatalf("UpsertModelMapping error = %v", err)
 	}
 
-	handler := gateway.NewServer(gateway.Options{Runtime: config.Runtime{LocalAPIKey: "local-test-key"}}, store, routing.NewSelector(nil))
+	handler := gateway.NewServerWithOptions(gateway.Options{Runtime: config.Runtime{LocalAPIKey: "local-test-key"}}, store, routing.NewSelector(nil))
 
 	reqCtx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -531,7 +531,7 @@ func TestResponsesHandlerPersistsCooldownAndLogsFailoverUsage(t *testing.T) {
 		t.Fatalf("UpsertModelMapping second error = %v", err)
 	}
 
-	handler := gateway.NewServer(gateway.Options{Runtime: config.Runtime{LocalAPIKey: "local-test-key"}}, store, routing.NewSelector(func() time.Time {
+	handler := gateway.NewServerWithOptions(gateway.Options{Runtime: config.Runtime{LocalAPIKey: "local-test-key"}}, store, routing.NewSelector(func() time.Time {
 		return time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
 	}))
 
@@ -633,7 +633,7 @@ func newGatewayTestServerWithOptions(t *testing.T, options gateway.Options, fixt
 		}
 	}
 
-	return gateway.NewServer(options, store, routing.NewSelector(nil))
+	return gateway.NewServerWithOptions(options, store, routing.NewSelector(nil))
 }
 
 func performResponsesRequest(handler http.Handler, apiKey string, body []byte) *httptest.ResponseRecorder {

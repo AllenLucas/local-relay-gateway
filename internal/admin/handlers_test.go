@@ -224,6 +224,186 @@ func TestRuntimePageShowsEndpointsAndSavedRestartNotice(t *testing.T) {
 	}
 }
 
+func TestRuntimePageShowsRuntimeFileLoadWarning(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	runtimePath := filepath.Join(t.TempDir(), "missing-runtime.json")
+	handler, err := admin.NewHandlerWithOptions(store, admin.Options{
+		WriteToken:      adminWriteToken,
+		ListenAddr:      "127.0.0.1:8787",
+		RuntimeFilePath: runtimePath,
+	})
+	if err != nil {
+		t.Fatalf("NewHandlerWithOptions error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/runtime", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "Runtime file could not be loaded") {
+		t.Fatalf("body did not contain runtime load warning: %s", body)
+	}
+	if !strings.Contains(body, runtimePath) {
+		t.Fatalf("body did not contain runtime path: %s", body)
+	}
+}
+
+func TestRuntimePageNormalizesWildcardListenAddresses(t *testing.T) {
+	testCases := []struct {
+		name       string
+		listenAddr string
+		wantURL    string
+	}{
+		{name: "port only", listenAddr: ":8787", wantURL: "http://127.0.0.1:8787/openai/v1"},
+		{name: "ipv4 wildcard", listenAddr: "0.0.0.0:8787", wantURL: "http://127.0.0.1:8787/openai/v1"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "gateway.db")
+			store, err := sqlitestore.NewStore(dbPath)
+			if err != nil {
+				t.Fatalf("NewStore error = %v", err)
+			}
+			defer store.Close()
+
+			runtimePath := filepath.Join(t.TempDir(), "runtime.json")
+			if err := config.SaveRuntimeFile(runtimePath, config.RuntimeFile{LocalAPIKey: "local-key"}); err != nil {
+				t.Fatalf("SaveRuntimeFile error = %v", err)
+			}
+
+			handler, err := admin.NewHandlerWithOptions(store, admin.Options{
+				WriteToken:      adminWriteToken,
+				ListenAddr:      tc.listenAddr,
+				RuntimeFilePath: runtimePath,
+			})
+			if err != nil {
+				t.Fatalf("NewHandlerWithOptions error = %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "/admin/runtime", nil)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+			}
+			if !strings.Contains(recorder.Body.String(), tc.wantURL) {
+				t.Fatalf("body did not contain normalized url %q: %s", tc.wantURL, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestSetupPostRejectsMissingOrInvalidWriteToken(t *testing.T) {
+	testCases := []struct {
+		name  string
+		value string
+	}{
+		{name: "missing", value: ""},
+		{name: "invalid", value: "wrong-token"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "gateway.db")
+			store, err := sqlitestore.NewStore(dbPath)
+			if err != nil {
+				t.Fatalf("NewStore error = %v", err)
+			}
+			defer store.Close()
+
+			runtimePath := filepath.Join(t.TempDir(), "runtime.json")
+			handler, err := admin.NewHandlerWithOptions(store, admin.Options{
+				WriteToken:      adminWriteToken,
+				RuntimeFilePath: runtimePath,
+			})
+			if err != nil {
+				t.Fatalf("NewHandlerWithOptions error = %v", err)
+			}
+
+			form := url.Values{"local_api_key": []string{"local-key"}}
+			if tc.value != "" {
+				form.Set("write_token", tc.value)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/admin/setup", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+
+			if recorder.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
+			}
+			if _, err := config.LoadRuntimeFile(runtimePath); err == nil {
+				t.Fatal("runtime file was unexpectedly saved")
+			}
+		})
+	}
+}
+
+func TestRuntimePostRejectsMissingOrInvalidWriteToken(t *testing.T) {
+	testCases := []struct {
+		name  string
+		value string
+	}{
+		{name: "missing", value: ""},
+		{name: "invalid", value: "wrong-token"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "gateway.db")
+			store, err := sqlitestore.NewStore(dbPath)
+			if err != nil {
+				t.Fatalf("NewStore error = %v", err)
+			}
+			defer store.Close()
+
+			runtimePath := filepath.Join(t.TempDir(), "runtime.json")
+			if err := config.SaveRuntimeFile(runtimePath, config.RuntimeFile{LocalAPIKey: "old-key"}); err != nil {
+				t.Fatalf("SaveRuntimeFile error = %v", err)
+			}
+			handler, err := admin.NewHandlerWithOptions(store, admin.Options{
+				WriteToken:      adminWriteToken,
+				RuntimeFilePath: runtimePath,
+			})
+			if err != nil {
+				t.Fatalf("NewHandlerWithOptions error = %v", err)
+			}
+
+			form := url.Values{"local_api_key": []string{"new-key"}}
+			if tc.value != "" {
+				form.Set("write_token", tc.value)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/admin/runtime", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+
+			if recorder.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
+			}
+			saved, err := config.LoadRuntimeFile(runtimePath)
+			if err != nil {
+				t.Fatalf("LoadRuntimeFile error = %v", err)
+			}
+			if saved.LocalAPIKey != "old-key" {
+				t.Fatalf("saved LocalAPIKey = %q, want %q", saved.LocalAPIKey, "old-key")
+			}
+		})
+	}
+}
+
 func TestStationsPageShowsOnboardingWhenEmpty(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "gateway.db")
 	store, err := sqlitestore.NewStore(dbPath)

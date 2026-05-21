@@ -6,6 +6,7 @@ import (
 	"errors"
 	"html/template"
 	"io/fs"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -148,18 +149,23 @@ func (h *Handler) handleRuntime(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		localAPIKey := ""
+		runtimeError := ""
 		if h.runtimeFilePath != "" {
-			if runtimeFile, err := config.LoadRuntimeFile(h.runtimeFilePath); err == nil {
+			if runtimeFile, err := config.LoadRuntimeFile(h.runtimeFilePath); err != nil {
+				runtimeError = "Runtime file could not be loaded: " + err.Error()
+			} else {
 				localAPIKey = runtimeFile.LocalAPIKey
 			}
 		}
+		localBaseURL := localBaseURL(h.listenAddr)
 		data := RuntimePage{
 			Title:           "Runtime",
 			WriteToken:      h.writeToken,
 			ListenAddr:      h.listenAddr,
-			OpenAIBaseURL:   "http://" + h.listenAddr + "/openai/v1",
-			AnthropicURL:    "http://" + h.listenAddr + "/anthropic",
+			OpenAIBaseURL:   localBaseURL + "/openai/v1",
+			AnthropicURL:    localBaseURL + "/anthropic",
 			LocalAPIKey:     localAPIKey,
+			RuntimeError:    runtimeError,
 			RuntimeFilePath: h.runtimeFilePath,
 			Saved:           r.URL.Query().Get("saved") == "1",
 		}
@@ -200,6 +206,20 @@ func (h *Handler) hasValidRuntimeFile() bool {
 	}
 	runtimeFile, err := config.LoadRuntimeFile(h.runtimeFilePath)
 	return err == nil && strings.TrimSpace(runtimeFile.LocalAPIKey) != ""
+}
+
+func localBaseURL(listenAddr string) string {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(listenAddr))
+	if err != nil {
+		if strings.HasPrefix(listenAddr, ":") {
+			return "http://127.0.0.1" + listenAddr
+		}
+		return "http://" + listenAddr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 func (h *Handler) handleStations(w http.ResponseWriter, r *http.Request) {

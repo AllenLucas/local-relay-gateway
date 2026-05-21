@@ -7,13 +7,20 @@ document.addEventListener("DOMContentLoaded", () => {
       const target = document.getElementById(button.dataset.copyTarget);
       if (!target) return;
       const value = target.value || target.textContent || "";
-      if (navigator.clipboard) {
-        await navigator.clipboard.writeText(value);
-      } else {
-        target.select();
-        document.execCommand("copy");
+      let copied = false;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try {
+          await navigator.clipboard.writeText(value);
+          copied = true;
+        } catch (_) {
+          copied = false;
+        }
       }
-      button.textContent = "Copied";
+      if (!copied) {
+        target.select();
+        copied = document.execCommand("copy");
+      }
+      button.textContent = copied ? "Copied" : "Copy failed";
       window.setTimeout(() => {
         button.textContent = "Copy";
       }, 1200);
