@@ -31,6 +31,7 @@ local-relay-gateway.db
 .DS_Store
 Thumbs.db
 Desktop.ini
+.claude/
 .idea/
 .vscode/
 
