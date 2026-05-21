@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"relay-gateway/internal/configsync"
 	"relay-gateway/internal/core"
 	sqlitestore "relay-gateway/internal/storage/sqlite"
 )
@@ -284,6 +285,293 @@ func TestStoreUpdatesStationAndAllowsSingleProtocolConfig(t *testing.T) {
 	}
 	if station.AnthropicBaseURL != "https://a.example.com/anthropic" {
 		t.Fatalf("AnthropicBaseURL = %q, want %q", station.AnthropicBaseURL, "https://a.example.com/anthropic")
+	}
+}
+
+func TestStoreDeletesStationConfigWithoutDeletingHistory(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	stationID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "station-a",
+		Enabled:                      true,
+		Priority:                     10,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                "https://a.example.com/openai",
+		OpenAIAPIKey:                 "OPENAI_A",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{
+		StationID:     stationID,
+		Protocol:      core.ProtocolOpenAI,
+		Alias:         "gpt-5",
+		UpstreamModel: "gpt-5.1",
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("UpsertModelMapping error = %v", err)
+	}
+	if err := store.SaveStationStatus(ctx, core.StationStatus{
+		StationID:           stationID,
+		State:               "cooldown",
+		ConsecutiveFailures: 1,
+		LastCheckedAt:       time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("SaveStationStatus error = %v", err)
+	}
+	if err := store.InsertRequestLog(ctx, core.RequestLog{
+		Protocol:    core.ProtocolOpenAI,
+		Alias:       "gpt-5",
+		StationName: "station-a",
+		StatusCode:  200,
+		CreatedAt:   time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("InsertRequestLog error = %v", err)
+	}
+
+	if err := store.DeleteStation(ctx, stationID); err != nil {
+		t.Fatalf("DeleteStation error = %v", err)
+	}
+
+	stations, err := store.ListStations(ctx)
+	if err != nil {
+		t.Fatalf("ListStations error = %v", err)
+	}
+	if len(stations) != 0 {
+		t.Fatalf("len(stations) = %d, want 0", len(stations))
+	}
+	mappings, err := store.ListMappings(ctx)
+	if err != nil {
+		t.Fatalf("ListMappings error = %v", err)
+	}
+	if len(mappings) != 0 {
+		t.Fatalf("len(mappings) = %d, want 0", len(mappings))
+	}
+	statuses, err := store.ListStationStatuses(ctx)
+	if err != nil {
+		t.Fatalf("ListStationStatuses error = %v", err)
+	}
+	if len(statuses) != 0 {
+		t.Fatalf("len(statuses) = %d, want 0", len(statuses))
+	}
+	logs, err := store.ListRequestLogs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListRequestLogs error = %v", err)
+	}
+	if len(logs) != 1 || logs[0].StationName != "station-a" {
+		t.Fatalf("logs after delete = %+v, want station-a history retained", logs)
+	}
+}
+
+func TestStoreDeletesSingleMapping(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	stationID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "station-a",
+		Enabled:                      true,
+		Priority:                     10,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                "https://a.example.com/openai",
+		OpenAIAPIKey:                 "OPENAI_A",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{
+		StationID:     stationID,
+		Protocol:      core.ProtocolOpenAI,
+		Alias:         "gpt-5",
+		UpstreamModel: "gpt-5.1",
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("UpsertModelMapping error = %v", err)
+	}
+	mappings, err := store.ListMappings(ctx)
+	if err != nil {
+		t.Fatalf("ListMappings error = %v", err)
+	}
+
+	if err := store.DeleteModelMapping(ctx, mappings[0].ID); err != nil {
+		t.Fatalf("DeleteModelMapping error = %v", err)
+	}
+
+	mappings, err = store.ListMappings(ctx)
+	if err != nil {
+		t.Fatalf("ListMappings after delete error = %v", err)
+	}
+	if len(mappings) != 0 {
+		t.Fatalf("len(mappings) = %d, want 0", len(mappings))
+	}
+	stations, err := store.ListStations(ctx)
+	if err != nil {
+		t.Fatalf("ListStations error = %v", err)
+	}
+	if len(stations) != 1 {
+		t.Fatalf("len(stations) = %d, want 1", len(stations))
+	}
+}
+
+func TestStoreExportsAndAppliesAuthoritativeConfigSnapshot(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	localOnlyID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "local-only",
+		Enabled:                      true,
+		Priority:                     1,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                "https://local.example.com/openai",
+		OpenAIAPIKey:                 "LOCAL_OPENAI",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation local-only error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{
+		StationID:     localOnlyID,
+		Protocol:      core.ProtocolOpenAI,
+		Alias:         "local-model",
+		UpstreamModel: "local-upstream",
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("UpsertModelMapping local-only error = %v", err)
+	}
+	stationID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "station-a",
+		Enabled:                      true,
+		Priority:                     10,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                "https://old.example.com/openai",
+		OpenAIAPIKey:                 "OLD_OPENAI",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation station-a error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{
+		StationID:     stationID,
+		Protocol:      core.ProtocolOpenAI,
+		Alias:         "gpt-5",
+		UpstreamModel: "old-upstream",
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("UpsertModelMapping station-a error = %v", err)
+	}
+
+	result, err := store.ApplyConfigSnapshot(ctx, configsync.Snapshot{
+		SchemaVersion: configsync.SnapshotSchemaVersion,
+		Stations: []configsync.SnapshotStation{
+			{
+				Name:                         "station-a",
+				Enabled:                      false,
+				Priority:                     100,
+				CooldownSeconds:              45,
+				HealthCheckIntervalSeconds:   20,
+				HealthCheckTimeoutSeconds:    8,
+				ConsecutiveFailureThreshold:  2,
+				ConsecutiveRecoveryThreshold: 3,
+				OpenAIBaseURL:                "https://new.example.com/openai",
+				OpenAIAPIKey:                 "NEW_OPENAI",
+				AnthropicBaseURL:             "https://new.example.com/anthropic",
+				AnthropicAPIKey:              "NEW_ANTHROPIC",
+			},
+			{
+				Name:                         "station-b",
+				Enabled:                      true,
+				Priority:                     50,
+				CooldownSeconds:              60,
+				HealthCheckIntervalSeconds:   15,
+				HealthCheckTimeoutSeconds:    5,
+				ConsecutiveFailureThreshold:  1,
+				ConsecutiveRecoveryThreshold: 2,
+				AnthropicBaseURL:             "https://b.example.com/anthropic",
+				AnthropicAPIKey:              "B_ANTHROPIC",
+			},
+		},
+		Mappings: []configsync.SnapshotMapping{
+			{
+				StationName:   "station-a",
+				Protocol:      core.ProtocolOpenAI,
+				Alias:         "gpt-5",
+				UpstreamModel: "gpt-5.1",
+				Enabled:       false,
+			},
+			{
+				StationName:   "station-b",
+				Protocol:      core.ProtocolAnthropic,
+				Alias:         "claude-sonnet",
+				UpstreamModel: "claude-sonnet-4-5",
+				Enabled:       true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyConfigSnapshot error = %v", err)
+	}
+	if result.CreatedStations != 1 || result.UpdatedStations != 1 || result.DeletedStations != 1 {
+		t.Fatalf("station result = %+v, want 1 created, 1 updated, 1 deleted", result)
+	}
+	if result.CreatedMappings != 1 || result.UpdatedMappings != 1 || result.DeletedMappings != 1 {
+		t.Fatalf("mapping result = %+v, want 1 created, 1 updated, 1 deleted", result)
+	}
+
+	exported, err := store.ExportConfigSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("ExportConfigSnapshot error = %v", err)
+	}
+	if len(exported.Stations) != 2 {
+		t.Fatalf("len(exported.Stations) = %d, want 2", len(exported.Stations))
+	}
+	if len(exported.Mappings) != 2 {
+		t.Fatalf("len(exported.Mappings) = %d, want 2", len(exported.Mappings))
+	}
+	if exported.Stations[0].Name == "local-only" || exported.Stations[1].Name == "local-only" {
+		t.Fatalf("local-only station was not deleted in authoritative import: %+v", exported.Stations)
+	}
+	if exported.Stations[0].OpenAIAPIKey == "" && exported.Stations[1].OpenAIAPIKey == "" {
+		t.Fatalf("upstream API keys were not exported: %+v", exported.Stations)
+	}
+	for _, mapping := range exported.Mappings {
+		if mapping.StationName == "" {
+			t.Fatalf("exported mapping did not include station name: %+v", mapping)
+		}
+		if mapping.StationName == "local-only" {
+			t.Fatalf("local-only mapping was not deleted: %+v", exported.Mappings)
+		}
 	}
 }
 

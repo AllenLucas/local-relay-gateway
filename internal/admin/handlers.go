@@ -9,10 +9,14 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"relay-gateway/internal/config"
+	"relay-gateway/internal/configsync"
 	"relay-gateway/internal/core"
 )
 
@@ -23,11 +27,15 @@ type store interface {
 	CreateStation(ctx context.Context, station core.Station) (int64, error)
 	GetStation(ctx context.Context, stationID int64) (core.Station, error)
 	UpdateStation(ctx context.Context, station core.Station) error
+	DeleteStation(ctx context.Context, stationID int64) error
 	ListStations(ctx context.Context) ([]core.Station, error)
 	ListMappings(ctx context.Context) ([]core.ModelMapping, error)
 	UpsertModelMapping(ctx context.Context, mapping core.ModelMapping) error
 	GetMapping(ctx context.Context, mappingID int64) (core.ModelMapping, error)
 	UpdateModelMapping(ctx context.Context, mapping core.ModelMapping) error
+	DeleteModelMapping(ctx context.Context, mappingID int64) error
+	ExportConfigSnapshot(ctx context.Context) (configsync.Snapshot, error)
+	ApplyConfigSnapshot(ctx context.Context, snapshot configsync.Snapshot) (configsync.ApplyResult, error)
 	ListStationStatuses(ctx context.Context) (map[int64]core.StationStatus, error)
 	ListRequestLogs(ctx context.Context, limit int) ([]core.RequestLog, error)
 	ListFailoverEvents(ctx context.Context, limit int) ([]core.FailoverEvent, error)
@@ -42,6 +50,7 @@ type Handler struct {
 	runtimeFilePath string
 	runtimeWarning  string
 	setupMode       bool
+	now             func() time.Time
 	staticRoot      http.Handler
 }
 
@@ -51,6 +60,7 @@ type Options struct {
 	RuntimeFilePath string
 	RuntimeWarning  string
 	SetupMode       bool
+	Now             func() time.Time
 }
 
 func NewHandler(store store, writeToken string) (http.Handler, error) {
@@ -74,7 +84,11 @@ func NewHandlerWithOptions(store store, options Options) (http.Handler, error) {
 		runtimeFilePath: strings.TrimSpace(options.RuntimeFilePath),
 		runtimeWarning:  strings.TrimSpace(options.RuntimeWarning),
 		setupMode:       options.SetupMode,
+		now:             options.Now,
 		staticRoot:      http.StripPrefix("/admin/assets/", http.FileServer(http.FS(staticFS))),
+	}
+	if handler.now == nil {
+		handler.now = time.Now
 	}
 
 	mux := http.NewServeMux()
@@ -82,12 +96,17 @@ func NewHandlerWithOptions(store store, options Options) (http.Handler, error) {
 	mux.HandleFunc("/admin/", handler.handleRoot)
 	mux.HandleFunc("/admin/setup", handler.handleSetup)
 	mux.HandleFunc("/admin/runtime", handler.handleRuntime)
+	mux.HandleFunc("/admin/sync", handler.handleSync)
+	mux.HandleFunc("/admin/sync/upload", handler.handleSyncUpload)
+	mux.HandleFunc("/admin/sync/pull", handler.handleSyncPull)
 	mux.HandleFunc("/admin/stations", handler.handleStations)
 	mux.HandleFunc("/admin/stations/edit", handler.handleStationEdit)
 	mux.HandleFunc("/admin/stations/update", handler.handleStationUpdate)
+	mux.HandleFunc("/admin/stations/delete", handler.handleStationDelete)
 	mux.HandleFunc("/admin/mappings", handler.handleMappings)
 	mux.HandleFunc("/admin/mappings/edit", handler.handleMappingEdit)
 	mux.HandleFunc("/admin/mappings/update", handler.handleMappingUpdate)
+	mux.HandleFunc("/admin/mappings/delete", handler.handleMappingDelete)
 	mux.HandleFunc("/admin/status", handler.handleStatus)
 	mux.HandleFunc("/admin/logs", handler.handleLogs)
 	mux.Handle("/admin/assets/", handler.staticRoot)
@@ -205,6 +224,118 @@ func (h *Handler) handleRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) handleSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	data := SyncPage{
+		Title:      "Sync",
+		WriteToken: h.writeToken,
+		DeviceName: defaultDeviceName(),
+		Uploaded:   r.URL.Query().Get("uploaded") == "1",
+		Pulled:     r.URL.Query().Get("pulled") == "1",
+		RemoteFile: r.URL.Query().Get("file"),
+		Result:     r.URL.Query().Get("result"),
+	}
+	if err := h.renderPage(w, "templates/sync.gohtml", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (h *Handler) handleSyncUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cfg, err := h.parseSyncForm(r)
+	if err != nil {
+		if errors.Is(err, errForbidden) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	snapshot, err := h.store.ExportConfigSnapshot(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	now := h.now().UTC()
+	snapshot.ExportedAt = now
+	snapshot.DeviceName = cfg.DeviceName
+	body, err := configsync.EncodeSnapshot(snapshot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	cfg.Now = func() time.Time { return now }
+	remoteFile, err := configsync.NewWebDAVClient(cfg).UploadSnapshot(r.Context(), body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	http.Redirect(w, r, "/admin/sync?uploaded=1&file="+urlQueryEscape(remoteFile.Path), http.StatusSeeOther)
+}
+
+func (h *Handler) handleSyncPull(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cfg, err := h.parseSyncForm(r)
+	if err != nil {
+		if errors.Is(err, errForbidden) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	remoteFile, err := configsync.NewWebDAVClient(cfg).DownloadLatestSnapshot(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	snapshot, err := configsync.DecodeSnapshot(remoteFile.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	result, err := h.store.ApplyConfigSnapshot(r.Context(), snapshot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/admin/sync?pulled=1&file="+urlQueryEscape(remoteFile.Path)+"&result="+urlQueryEscape(syncResultText(result)), http.StatusSeeOther)
+}
+
+func (h *Handler) parseSyncForm(r *http.Request) (configsync.WebDAVConfig, error) {
+	if err := r.ParseForm(); err != nil {
+		return configsync.WebDAVConfig{}, err
+	}
+	if !h.isValidWriteToken(r.Form.Get("write_token")) {
+		return configsync.WebDAVConfig{}, errForbidden
+	}
+	webDAVURL, err := parseRequiredText(r.Form.Get("webdav_url"))
+	if err != nil {
+		return configsync.WebDAVConfig{}, err
+	}
+	deviceName := strings.TrimSpace(r.Form.Get("device_name"))
+	if deviceName == "" {
+		deviceName = defaultDeviceName()
+	}
+	return configsync.WebDAVConfig{
+		BaseURL:    webDAVURL,
+		Username:   strings.TrimSpace(r.Form.Get("username")),
+		Password:   strings.TrimSpace(r.Form.Get("password")),
+		DeviceName: deviceName,
+	}, nil
+}
+
 func (h *Handler) hasValidRuntimeFile() bool {
 	if h.runtimeFilePath == "" {
 		return false
@@ -249,6 +380,10 @@ func (h *Handler) handleStations(w http.ResponseWriter, r *http.Request) {
 		anthropicAPIKey := strings.TrimSpace(r.Form.Get("anthropic_api_key"))
 		if err := validateStationProtocols(openAIBaseURL, openAIAPIKey, anthropicBaseURL, anthropicAPIKey); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if h.stationNameExists(r.Context(), name, 0) {
+			http.Error(w, "station name already exists", http.StatusBadRequest)
 			return
 		}
 
@@ -393,8 +528,41 @@ func (h *Handler) handleStationUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	station.ID = stationID
+	if h.stationNameExists(r.Context(), station.Name, stationID) {
+		http.Error(w, "station name already exists", http.StatusBadRequest)
+		return
+	}
 
 	if err := h.store.UpdateStation(r.Context(), station); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/admin/stations", http.StatusSeeOther)
+}
+
+func (h *Handler) handleStationDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !h.isValidWriteToken(r.Form.Get("write_token")) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	stationID, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("id")), 10, 64)
+	if err != nil || stationID <= 0 {
+		http.Error(w, "invalid station id", http.StatusBadRequest)
+		return
+	}
+	if err := h.store.DeleteStation(r.Context(), stationID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "station not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -515,6 +683,35 @@ func (h *Handler) handleMappingUpdate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/mappings", http.StatusSeeOther)
 }
 
+func (h *Handler) handleMappingDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !h.isValidWriteToken(r.Form.Get("write_token")) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	mappingID, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("id")), 10, 64)
+	if err != nil || mappingID <= 0 {
+		http.Error(w, "invalid mapping id", http.StatusBadRequest)
+		return
+	}
+	if err := h.store.DeleteModelMapping(r.Context(), mappingID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "mapping not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/admin/mappings", http.StatusSeeOther)
+}
+
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	stations, err := h.store.ListStations(r.Context())
 	if err != nil {
@@ -573,6 +770,21 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) isValidWriteToken(value string) bool {
 	return h.writeToken != "" && value == h.writeToken
+}
+
+var errForbidden = errors.New("forbidden")
+
+func (h *Handler) stationNameExists(ctx context.Context, name string, exceptID int64) bool {
+	stations, err := h.store.ListStations(ctx)
+	if err != nil {
+		return false
+	}
+	for _, station := range stations {
+		if station.Name == name && station.ID != exceptID {
+			return true
+		}
+	}
+	return false
 }
 
 func parseStationForm(r *http.Request) (core.Station, error) {
@@ -728,4 +940,25 @@ func parseRequiredText(value string) (string, error) {
 		return "", errors.New("required field is empty")
 	}
 	return trimmed, nil
+}
+
+func defaultDeviceName() string {
+	name, err := os.Hostname()
+	if err != nil || strings.TrimSpace(name) == "" {
+		return "local-device"
+	}
+	return strings.TrimSpace(name)
+}
+
+func syncResultText(result configsync.ApplyResult) string {
+	return "stations created=" + strconv.Itoa(result.CreatedStations) +
+		" updated=" + strconv.Itoa(result.UpdatedStations) +
+		" deleted=" + strconv.Itoa(result.DeletedStations) +
+		"; mappings created=" + strconv.Itoa(result.CreatedMappings) +
+		" updated=" + strconv.Itoa(result.UpdatedMappings) +
+		" deleted=" + strconv.Itoa(result.DeletedMappings)
+}
+
+func urlQueryEscape(value string) string {
+	return url.QueryEscape(value)
 }

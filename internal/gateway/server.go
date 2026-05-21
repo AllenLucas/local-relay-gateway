@@ -11,6 +11,7 @@ import (
 
 	"relay-gateway/internal/admin"
 	"relay-gateway/internal/config"
+	"relay-gateway/internal/configsync"
 	"relay-gateway/internal/core"
 	"relay-gateway/internal/protocol/anthropic"
 	"relay-gateway/internal/protocol/openai"
@@ -21,11 +22,15 @@ type store interface {
 	CreateStation(ctx context.Context, station core.Station) (int64, error)
 	GetStation(ctx context.Context, stationID int64) (core.Station, error)
 	UpdateStation(ctx context.Context, station core.Station) error
+	DeleteStation(ctx context.Context, stationID int64) error
 	ListStations(ctx context.Context) ([]core.Station, error)
 	ListMappings(ctx context.Context) ([]core.ModelMapping, error)
 	UpsertModelMapping(ctx context.Context, mapping core.ModelMapping) error
 	GetMapping(ctx context.Context, mappingID int64) (core.ModelMapping, error)
 	UpdateModelMapping(ctx context.Context, mapping core.ModelMapping) error
+	DeleteModelMapping(ctx context.Context, mappingID int64) error
+	ExportConfigSnapshot(ctx context.Context) (configsync.Snapshot, error)
+	ApplyConfigSnapshot(ctx context.Context, snapshot configsync.Snapshot) (configsync.ApplyResult, error)
 	FindMappings(ctx context.Context, protocol core.Protocol, alias string) ([]core.ModelMapping, error)
 	ListStationStatuses(ctx context.Context) (map[int64]core.StationStatus, error)
 	SaveStationStatus(ctx context.Context, status core.StationStatus) error

@@ -84,7 +84,14 @@
       <td>{{.Alias}}</td>
       <td>{{.UpstreamModel}}</td>
       <td>{{if .Enabled}}<span class="pill ok">on</span>{{else}}<span class="pill">off</span>{{end}}</td>
-      <td><a href="/admin/mappings/edit?id={{.ID}}">编辑</a></td>
+      <td>
+        <a href="/admin/mappings/edit?id={{.ID}}">编辑</a>
+        <form method="post" action="/admin/mappings/delete" style="display:inline;" data-confirm="Delete mapping {{.Alias}}?">
+          <input type="hidden" name="write_token" value="{{$.WriteToken}}">
+          <input type="hidden" name="id" value="{{.ID}}">
+          <button class="subtle" type="submit">Delete</button>
+        </form>
+      </td>
     </tr>
     {{else}}
     <tr>

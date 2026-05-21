@@ -151,7 +151,14 @@
       <td>{{.Priority}}</td>
       <td class="muted">{{if .OpenAIBaseURL}}{{.OpenAIBaseURL}}{{else}}—{{end}}</td>
       <td class="muted">{{if .AnthropicBaseURL}}{{.AnthropicBaseURL}}{{else}}—{{end}}</td>
-      <td><a href="/admin/stations/edit?id={{.ID}}">编辑</a></td>
+      <td>
+        <a href="/admin/stations/edit?id={{.ID}}">编辑</a>
+        <form method="post" action="/admin/stations/delete" style="display:inline;" data-confirm="Delete station {{.Name}}?">
+          <input type="hidden" name="write_token" value="{{$.WriteToken}}">
+          <input type="hidden" name="id" value="{{.ID}}">
+          <button class="subtle" type="submit">Delete</button>
+        </form>
+      </td>
     </tr>
     {{else}}
     <tr>

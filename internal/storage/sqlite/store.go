@@ -128,6 +128,34 @@ func (s *Store) UpdateStation(ctx context.Context, station core.Station) error {
 	return nil
 }
 
+func (s *Store) DeleteStation(ctx context.Context, stationID int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollbackUnlessCommitted(tx)
+
+	if _, err = tx.ExecContext(ctx, `DELETE FROM model_mappings WHERE station_id = ?`, stationID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM station_statuses WHERE station_id = ?`, stationID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM stations WHERE id = ?`, stationID)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	err = tx.Commit()
+	return err
+}
+
 func (s *Store) ListStations(ctx context.Context) ([]core.Station, error) {
 	rows, err := s.db.QueryContext(ctx, `
         SELECT id, name, enabled, priority, cooldown_seconds,
@@ -245,6 +273,21 @@ func (s *Store) UpdateModelMapping(ctx context.Context, mapping core.ModelMappin
 		boolToInt(mapping.Enabled),
 		mapping.ID,
 	)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) DeleteModelMapping(ctx context.Context, mappingID int64) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM model_mappings WHERE id = ?`, mappingID)
 	if err != nil {
 		return err
 	}

@@ -59,3 +59,13 @@ type RuntimePage struct {
 	RuntimeFilePath string
 	Saved           bool
 }
+
+type SyncPage struct {
+	Title      string
+	WriteToken string
+	DeviceName string
+	Uploaded   bool
+	Pulled     bool
+	RemoteFile string
+	Result     string
+}

@@ -2,6 +2,7 @@ package admin_test
 
 import (
 	"context"
+	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,9 +10,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"relay-gateway/internal/admin"
 	"relay-gateway/internal/config"
+	"relay-gateway/internal/configsync"
 	"relay-gateway/internal/core"
 	sqlitestore "relay-gateway/internal/storage/sqlite"
 )
@@ -72,6 +75,9 @@ func TestStationsPageRendersSavedStations(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), `href="/admin/logs"`) {
 		t.Fatalf("body did not contain logs nav link: %s", recorder.Body.String())
 	}
+	if !strings.Contains(recorder.Body.String(), `href="/admin/sync"`) {
+		t.Fatalf("body did not contain sync nav link: %s", recorder.Body.String())
+	}
 
 	mappingReq := httptest.NewRequest(http.MethodGet, "/admin/mappings", nil)
 	mappingRecorder := httptest.NewRecorder()
@@ -88,6 +94,345 @@ func TestStationsPageRendersSavedStations(t *testing.T) {
 	}
 	if !strings.Contains(mappingRecorder.Body.String(), "/admin/mappings/edit?id=") {
 		t.Fatalf("mapping page did not contain edit link: %s", mappingRecorder.Body.String())
+	}
+}
+
+func TestStationDeletePostRemovesStationMappingsAndStatus(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	stationID, err := createAdminTestStation(store, "station-a")
+	if err != nil {
+		t.Fatalf("CreateStation error = %v", err)
+	}
+	if err := store.UpsertModelMapping(context.Background(), core.ModelMapping{
+		StationID:     stationID,
+		Protocol:      core.ProtocolOpenAI,
+		Alias:         "gpt-5",
+		UpstreamModel: "gpt-5.1",
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("UpsertModelMapping error = %v", err)
+	}
+	if err := store.SaveStationStatus(context.Background(), core.StationStatus{
+		StationID:     stationID,
+		State:         "healthy",
+		LastCheckedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("SaveStationStatus error = %v", err)
+	}
+
+	handler, err := admin.NewHandler(store, adminWriteToken)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	form := url.Values{
+		"write_token": []string{adminWriteToken},
+		"id":          []string{strconv.FormatInt(stationID, 10)},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/admin/stations/delete", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	if got := recorder.Header().Get("Location"); got != "/admin/stations" {
+		t.Fatalf("redirect location = %q, want /admin/stations", got)
+	}
+	stations, err := store.ListStations(context.Background())
+	if err != nil {
+		t.Fatalf("ListStations error = %v", err)
+	}
+	if len(stations) != 0 {
+		t.Fatalf("len(stations) = %d, want 0", len(stations))
+	}
+	mappings, err := store.ListMappings(context.Background())
+	if err != nil {
+		t.Fatalf("ListMappings error = %v", err)
+	}
+	if len(mappings) != 0 {
+		t.Fatalf("len(mappings) = %d, want 0", len(mappings))
+	}
+	statuses, err := store.ListStationStatuses(context.Background())
+	if err != nil {
+		t.Fatalf("ListStationStatuses error = %v", err)
+	}
+	if len(statuses) != 0 {
+		t.Fatalf("len(statuses) = %d, want 0", len(statuses))
+	}
+}
+
+func TestMappingDeletePostRemovesOnlyMapping(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	stationID, err := createAdminTestStation(store, "station-a")
+	if err != nil {
+		t.Fatalf("CreateStation error = %v", err)
+	}
+	if err := store.UpsertModelMapping(context.Background(), core.ModelMapping{
+		StationID:     stationID,
+		Protocol:      core.ProtocolOpenAI,
+		Alias:         "gpt-5",
+		UpstreamModel: "gpt-5.1",
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("UpsertModelMapping error = %v", err)
+	}
+	mappings, err := store.ListMappings(context.Background())
+	if err != nil {
+		t.Fatalf("ListMappings error = %v", err)
+	}
+
+	handler, err := admin.NewHandler(store, adminWriteToken)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	form := url.Values{
+		"write_token": []string{adminWriteToken},
+		"id":          []string{strconv.FormatInt(mappings[0].ID, 10)},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/admin/mappings/delete", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	mappings, err = store.ListMappings(context.Background())
+	if err != nil {
+		t.Fatalf("ListMappings after delete error = %v", err)
+	}
+	if len(mappings) != 0 {
+		t.Fatalf("len(mappings) = %d, want 0", len(mappings))
+	}
+	stations, err := store.ListStations(context.Background())
+	if err != nil {
+		t.Fatalf("ListStations error = %v", err)
+	}
+	if len(stations) != 1 {
+		t.Fatalf("len(stations) = %d, want 1", len(stations))
+	}
+}
+
+func TestStationCreatePostRejectsDuplicateNameWithFriendlyMessage(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+	if _, err := createAdminTestStation(store, "station-a"); err != nil {
+		t.Fatalf("CreateStation error = %v", err)
+	}
+
+	handler, err := admin.NewHandler(store, adminWriteToken)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	form := validStationForm()
+	form.Set("name", "station-a")
+	req := httptest.NewRequest(http.MethodPost, "/admin/stations", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(recorder.Body.String(), "station name already exists") {
+		t.Fatalf("body did not contain friendly duplicate message: %s", recorder.Body.String())
+	}
+}
+
+func TestSyncUploadPostsConfigSnapshotToWebDAV(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	stationID, err := createAdminTestStation(store, "station-a")
+	if err != nil {
+		t.Fatalf("CreateStation error = %v", err)
+	}
+	if err := store.UpsertModelMapping(context.Background(), core.ModelMapping{
+		StationID:     stationID,
+		Protocol:      core.ProtocolOpenAI,
+		Alias:         "gpt-5",
+		UpstreamModel: "gpt-5.1",
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("UpsertModelMapping error = %v", err)
+	}
+
+	var uploadedBody string
+	var uploadedPath string
+	webdav := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "MKCOL":
+			w.WriteHeader(http.StatusCreated)
+		case "PUT":
+			uploadedPath = r.URL.Path
+			body := make([]byte, r.ContentLength)
+			_, _ = r.Body.Read(body)
+			uploadedBody = string(body)
+			w.WriteHeader(http.StatusCreated)
+		case "PROPFIND":
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><d:multistatus xmlns:d="DAV:"></d:multistatus>`))
+		default:
+			t.Fatalf("unexpected webdav method %s", r.Method)
+		}
+	}))
+	defer webdav.Close()
+
+	handler, err := admin.NewHandlerWithOptions(store, admin.Options{
+		WriteToken: adminWriteToken,
+		Now: func() time.Time {
+			return time.Date(2026, 5, 21, 14, 30, 45, 0, time.UTC)
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewHandlerWithOptions error = %v", err)
+	}
+
+	form := syncForm(webdav.URL + "/remote/")
+	form.Set("device_name", "Test Workstation")
+	req := httptest.NewRequest(http.MethodPost, "/admin/sync/upload", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusSeeOther, recorder.Body.String())
+	}
+	if !strings.Contains(uploadedPath, "lrg-config-20260521T143045Z-test-workstation.json") {
+		t.Fatalf("uploaded path = %q", uploadedPath)
+	}
+	for _, want := range []string{"station-a", "OPENAI_A", "ANTHROPIC_A", "gpt-5"} {
+		if !strings.Contains(uploadedBody, want) {
+			t.Fatalf("uploaded body did not contain %q: %s", want, uploadedBody)
+		}
+	}
+	if strings.Contains(uploadedBody, "local_api_key") {
+		t.Fatalf("uploaded body contained local_api_key: %s", uploadedBody)
+	}
+}
+
+func TestSyncPullAppliesRemoteAuthoritativeSnapshot(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	if _, err := createAdminTestStation(store, "local-only"); err != nil {
+		t.Fatalf("CreateStation local-only error = %v", err)
+	}
+	oldStationID, err := createAdminTestStation(store, "station-a")
+	if err != nil {
+		t.Fatalf("CreateStation station-a error = %v", err)
+	}
+	if err := store.UpsertModelMapping(context.Background(), core.ModelMapping{
+		StationID:     oldStationID,
+		Protocol:      core.ProtocolOpenAI,
+		Alias:         "old-model",
+		UpstreamModel: "old-upstream",
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("UpsertModelMapping old error = %v", err)
+	}
+
+	remoteSnapshot := configsync.Snapshot{
+		SchemaVersion: configsync.SnapshotSchemaVersion,
+		Stations: []configsync.SnapshotStation{
+			{
+				Name:                         "station-a",
+				Enabled:                      false,
+				Priority:                     90,
+				CooldownSeconds:              45,
+				HealthCheckIntervalSeconds:   20,
+				HealthCheckTimeoutSeconds:    8,
+				ConsecutiveFailureThreshold:  2,
+				ConsecutiveRecoveryThreshold: 3,
+				OpenAIBaseURL:                "https://remote.example.com/openai",
+				OpenAIAPIKey:                 "REMOTE_OPENAI",
+			},
+		},
+		Mappings: []configsync.SnapshotMapping{
+			{
+				StationName:   "station-a",
+				Protocol:      core.ProtocolOpenAI,
+				Alias:         "gpt-5",
+				UpstreamModel: "gpt-5.1",
+				Enabled:       true,
+			},
+		},
+	}
+	remoteBody, err := configsync.EncodeSnapshot(remoteSnapshot)
+	if err != nil {
+		t.Fatalf("EncodeSnapshot error = %v", err)
+	}
+	webdav := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PROPFIND":
+			_ = xml.NewEncoder(w).Encode(syncMultistatus{
+				Responses: []syncResponse{{Href: "/remote/lrg-config-20260521T143045Z-device.json"}},
+			})
+		case "GET":
+			_, _ = w.Write(remoteBody)
+		default:
+			t.Fatalf("unexpected webdav method %s", r.Method)
+		}
+	}))
+	defer webdav.Close()
+
+	handler, err := admin.NewHandler(store, adminWriteToken)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	form := syncForm(webdav.URL + "/remote/")
+	req := httptest.NewRequest(http.MethodPost, "/admin/sync/pull", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusSeeOther, recorder.Body.String())
+	}
+	stations, err := store.ListStations(context.Background())
+	if err != nil {
+		t.Fatalf("ListStations error = %v", err)
+	}
+	if len(stations) != 1 {
+		t.Fatalf("len(stations) = %d, want 1: %+v", len(stations), stations)
+	}
+	if stations[0].Name != "station-a" || stations[0].OpenAIAPIKey != "REMOTE_OPENAI" || stations[0].Enabled {
+		t.Fatalf("station after pull = %+v", stations[0])
+	}
+	mappings, err := store.ListMappings(context.Background())
+	if err != nil {
+		t.Fatalf("ListMappings error = %v", err)
+	}
+	if len(mappings) != 1 || mappings[0].Alias != "gpt-5" || mappings[0].StationID != stations[0].ID {
+		t.Fatalf("mappings after pull = %+v, station=%+v", mappings, stations[0])
 	}
 }
 
@@ -1238,6 +1583,25 @@ func validMappingForm(stationID string) url.Values {
 		"upstream_model": []string{"gpt-5.1"},
 		"enabled":        []string{"on"},
 	}
+}
+
+func syncForm(webdavURL string) url.Values {
+	return url.Values{
+		"write_token": []string{adminWriteToken},
+		"webdav_url":  []string{webdavURL},
+		"username":    []string{""},
+		"password":    []string{""},
+		"device_name": []string{"test-device"},
+	}
+}
+
+type syncMultistatus struct {
+	XMLName   xml.Name       `xml:"DAV: multistatus"`
+	Responses []syncResponse `xml:"response"`
+}
+
+type syncResponse struct {
+	Href string `xml:"href"`
 }
 
 func TestStationCreatePostRejectsMissingOrInvalidWriteToken(t *testing.T) {
