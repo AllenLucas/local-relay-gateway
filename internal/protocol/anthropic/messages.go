@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"relay-gateway/internal/core"
+	"relay-gateway/internal/protocol"
 )
 
 const defaultAnthropicVersion = "2023-06-01"
@@ -59,6 +60,7 @@ func BuildMessagesRequest(target core.ResolvedTarget, normalized core.Normalized
 	req.Header.Set("x-api-key", target.APIKey)
 	req.Header.Set("anthropic-version", anthropicVersion(normalized.Headers))
 	req.Header.Set("Content-Type", "application/json")
+	protocol.ApplyClientUserAgent(req, normalized.Headers)
 	return req, nil
 }
 

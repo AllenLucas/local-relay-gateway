@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"relay-gateway/internal/core"
+	"relay-gateway/internal/protocol"
 )
 
 func NormalizeResponses(r *http.Request) (core.NormalizedRequest, error) {
@@ -53,5 +54,6 @@ func BuildResponsesRequest(target core.ResolvedTarget, normalized core.Normalize
 	}
 	req.Header.Set("Authorization", "Bearer "+target.APIKey)
 	req.Header.Set("Content-Type", "application/json")
+	protocol.ApplyClientUserAgent(req, normalized.Headers)
 	return req, nil
 }
