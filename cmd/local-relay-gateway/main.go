@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os/signal"
@@ -34,9 +35,47 @@ func main() {
 	jobs.StartHealthLoop(rootCtx, store, selector)
 	jobs.StartRetentionLoop(rootCtx, store, 7*24*time.Hour, time.Hour)
 
+	server := &http.Server{
+		Addr:    cfg.ListenAddr,
+		Handler: newRootHandler(gateway.NewServer(cfg, store, selector)),
+	}
+
 	log.Printf("local relay gateway listening on %s", cfg.ListenAddr)
-	if err := http.ListenAndServe(cfg.ListenAddr, newRootHandler(gateway.NewServer(cfg, store, selector))); err != nil {
+	if err := serveHTTP(rootCtx, server, func() {
+		log.Printf("local relay gateway shutting down")
+	}); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func serveHTTP(ctx context.Context, server *http.Server, onShutdown func()) error {
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		if onShutdown != nil {
+			onShutdown()
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+
+		err := <-errCh
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
 	}
 }
 

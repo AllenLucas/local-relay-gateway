@@ -36,6 +36,12 @@ After the process starts, verify both the local health check and the admin UI:
 - `http://127.0.0.1:8787/healthz`
 - `http://127.0.0.1:8787/admin/stations`
 
+停止前台运行中的网关时，直接在当前 PowerShell 窗口按 `Ctrl+C`；当前版本会捕获中断信号并执行优雅关闭。  
+To stop the running foreground gateway, press `Ctrl+C` in the same PowerShell window; the current build catches the interrupt signal and performs a graceful shutdown.
+
+如果这个进程就是在当前终端前台启动的，直接关闭窗口通常也会一起结束进程，但这不是优雅关闭路径。  
+If the process was started in the foreground of that terminal, closing the window usually ends it too, but that is not the graceful shutdown path.
+
 ## Linux / macOS 启动 / Linux and macOS Startup
 
 在 `bash`、`zsh` 或兼容 shell 中先导出环境变量，再从源码启动。  
@@ -53,6 +59,12 @@ After startup, check the same endpoints:
 
 - `http://127.0.0.1:8787/healthz`
 - `http://127.0.0.1:8787/admin/stations`
+
+Linux 和 macOS 前台运行时同样优先在当前终端按 `Ctrl+C` 停止，这会让 HTTP 服务按优雅关闭流程退出。  
+On Linux and macOS, also prefer pressing `Ctrl+C` in the current terminal to stop the foreground process so the HTTP server exits through the graceful shutdown path.
+
+如果只是直接关掉运行中的终端窗口，前台进程通常也会结束，但属于强制中断。  
+If you simply close the terminal window, the foreground process usually ends as well, but that counts as a forced interruption.
 
 ## 环境变量 / Environment Variables
 

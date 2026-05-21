@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestNewRootHandlerServesHealthzAndDelegatesGateway(t *testing.T) {
@@ -38,5 +42,40 @@ func TestNewRootHandlerServesHealthzAndDelegatesGateway(t *testing.T) {
 	}
 	if got := gatewayResp.Body.String(); got != "gateway" {
 		t.Fatalf("gateway body = %q, want %q", got, "gateway")
+	}
+}
+
+func TestServeHTTPExitsWhenContextIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var closed atomic.Bool
+	server := &http.Server{
+		Addr:    "127.0.0.1:0",
+		Handler: newRootHandler(http.NotFoundHandler()),
+		BaseContext: func(net.Listener) context.Context {
+			return ctx
+		},
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- serveHTTP(ctx, server, func() { closed.Store(true) })
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("serveHTTP error = %v, want nil", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("serveHTTP did not exit after context cancellation")
+	}
+
+	if !closed.Load() {
+		t.Fatal("shutdown callback was not invoked")
 	}
 }

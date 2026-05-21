@@ -68,6 +68,12 @@ After startup, open these pages:
 - `http://127.0.0.1:8787/admin/stations`
 - `http://127.0.0.1:8787/healthz`
 
+停止前台进程时，Windows、Linux 和 macOS 都优先在当前终端按 `Ctrl+C`，这样会触发优雅关闭并让 HTTP 服务正常退出。  
+To stop the foreground process, prefer pressing `Ctrl+C` in the same terminal on Windows, Linux, and macOS so the server can shut down gracefully.
+
+如果进程就是在当前前台终端里启动的，直接关闭那个终端通常也会结束进程；但这属于强制中断，优先还是用 `Ctrl+C`。  
+If the process was started in the current foreground terminal, closing that terminal usually ends the process too, but that is a forced stop and `Ctrl+C` is still preferred.
+
 ## 站点配置 / Station Configuration
 
 每个站点可以保存 OpenAI、Anthropic 或两者同时保存的上游配置；至少要完整填写一组协议。优先级数字越大越先被尝试。  
