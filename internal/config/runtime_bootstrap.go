@@ -2,9 +2,11 @@ package config
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,8 +50,11 @@ func LoadWindowsBootstrap(root string) (Bootstrap, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return bootstrap, nil
 		}
-		bootstrap.Warning = "runtime.json is invalid and will be replaced when setup is saved"
-		return bootstrap, nil
+		if errors.Is(err, errInvalidRuntimeFile) {
+			bootstrap.Warning = "runtime.json is invalid and will be replaced when setup is saved"
+			return bootstrap, nil
+		}
+		return Bootstrap{}, err
 	}
 
 	runtime.LocalAPIKey = strings.TrimSpace(file.LocalAPIKey)
@@ -76,7 +81,7 @@ func LoadRuntimeFile(path string) (RuntimeFile, error) {
 
 	var file RuntimeFile
 	if err := json.Unmarshal(body, &file); err != nil {
-		return RuntimeFile{}, err
+		return RuntimeFile{}, fmt.Errorf("%w: %v", errInvalidRuntimeFile, err)
 	}
 	file.LocalAPIKey = strings.TrimSpace(file.LocalAPIKey)
 	return file, nil
@@ -98,6 +103,10 @@ func SaveRuntimeFile(path string, file RuntimeFile) error {
 	if err := os.WriteFile(tmpPath, body, 0o600); err != nil {
 		return err
 	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = os.Remove(tmpPath)
+		return err
+	}
 	return os.Rename(tmpPath, path)
 }
 
@@ -114,14 +123,21 @@ func setupBootstrap(root string, runtimePath string, runtime Runtime) Bootstrap 
 func deriveSetupWriteToken() string {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
-		return "setup-write-token"
+		return hashToken("local-relay-gateway setup write token")
 	}
 	return hex.EncodeToString(raw[:])
 }
 
 func deriveAdminWriteToken(localAPIKey string) string {
 	if token := strings.TrimSpace(localAPIKey); token != "" {
-		return token
+		return hashToken("local-relay-gateway admin write token\x00" + token)
 	}
 	return deriveSetupWriteToken()
+}
+
+var errInvalidRuntimeFile = errors.New("invalid runtime file")
+
+func hashToken(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
