@@ -84,10 +84,12 @@
 
 - `cmd/local-relay-gateway/main.go`
   - 进程入口
-  - 负责加载配置、初始化存储、启动后台任务和 HTTP 服务
+  - 负责加载启动配置、初始化存储、启动后台任务和 HTTP 服务
 
 - `internal/config/`
-  - 运行时环境变量读取
+  - 环境变量运行时配置
+  - Windows 文件引导运行时配置
+  - `runtime.json` 读写
 
 - `internal/gateway/`
   - 本地协议入口
@@ -116,7 +118,7 @@
 
 - `internal/admin/`
   - 本地管理页面
-  - 站点、映射、状态、日志
+  - 运行时配置、站点、映射、状态、日志
 
 - `docs/usage.md`
   - 操作手册
@@ -140,11 +142,26 @@
 - 路由只会选择当前协议真正可用的站点
 - Anthropic 转发前会去掉部分上游不兼容字段，例如 `context_management`
 - Admin 页面支持：
+  - 首次 `/admin/setup` 保存本地 `Local API Key`
+  - `/admin/runtime` 查看本地入口、显示/复制/修改本地 key
   - 新增站点
   - 编辑站点
   - 映射管理
   - 状态查看
   - 日志查看
+- Windows 无运行时环境变量启动时：
+  - 配置文件是 `%LocalAppData%\LocalRelayGateway\runtime.json`
+  - 默认数据库是 `%LocalAppData%\LocalRelayGateway\local-relay-gateway.db`
+  - 首次自动打开 `/admin/setup`
+  - 后续自动打开 `/admin/stations`
+- 环境变量启动时：
+  - `LRG_LOCAL_API_KEY`
+  - `LRG_LISTEN_ADDR`
+  - `LRG_DB_PATH`
+  - 仍然是开发/脚本优先入口
+- `/admin/runtime` 只管理本地网关身份和本地客户端入口，不管理上游站点
+- `/admin/stations` 仍然是唯一的上游站点配置来源
+- `/admin/runtime` 修改本地 key 后需要重启生效，不做热更新
 
 ## 6. 修改优先级
 
@@ -198,6 +215,9 @@
 Windows:
 
 ```powershell
+# 正式双击入口：编译后直接运行 local-relay-gateway.exe
+# 首次无环境变量时会使用 %LocalAppData%\LocalRelayGateway\runtime.json
+
 $env:LRG_LOCAL_API_KEY="replace-this-key"
 $env:LRG_LISTEN_ADDR="127.0.0.1:8787"
 $env:LRG_DB_PATH=".\local-relay-gateway.db"

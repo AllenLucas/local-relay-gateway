@@ -13,6 +13,8 @@ This project collapses multiple upstream OpenAI and Anthropic relays into one lo
 | `/openai/v1/responses` | OpenAI Responses-compatible proxy |
 | `/openai/v1/chat/completions` | OpenAI Chat Completions-compatible proxy |
 | `/anthropic/v1/messages` | Anthropic Messages-compatible proxy |
+| `/admin/setup` | First-run runtime key setup |
+| `/admin/runtime` | Local endpoint and runtime key management |
 | `/admin/stations` | Station management UI |
 | `/healthz` | Local process health check |
 
@@ -38,12 +40,21 @@ This project collapses multiple upstream OpenAI and Anthropic relays into one lo
 
 ## 架构概览 / Architecture
 
-- 本地进程读取运行时环境变量，启动 HTTP 服务并打开 SQLite 数据库。 / The local process reads runtime environment variables, starts the HTTP server, and opens the SQLite database.
+- 本地进程支持环境变量启动；Windows 无环境变量启动时会读取 `%LocalAppData%\LocalRelayGateway\runtime.json` 并自动打开浏览器。 / The local process supports environment-driven startup; on Windows without runtime environment variables it reads `%LocalAppData%\LocalRelayGateway\runtime.json` and opens the browser automatically.
 - `Stations` 保存 OpenAI 与 Anthropic 上游地址、密钥和阈值。 / `Stations` store OpenAI and Anthropic upstream URLs, keys, and thresholds.
 - `Mappings` 按 `station + protocol + alias` 把别名映射到真实模型名。 / `Mappings` translate aliases to real model names by `station + protocol + alias`.
 - 路由器只会挑选已启用、存在对应映射、且状态为空或 `healthy` 的站点。 / The router only chooses stations that are enabled, mapped for the request, and empty-state or `healthy`.
 
 ## 快速开始 / Quick Start
+
+Windows 正式入口可以直接双击编译后的 `local-relay-gateway.exe`。首次没有本地运行时配置时，程序会启动终端窗口、监听 `127.0.0.1:8787`，并自动打开 `http://127.0.0.1:8787/admin/setup`；保存 `Local API Key` 后会跳转到 `/admin/stations`，完成站点和映射配置后重启一次再接入客户端。  
+On Windows, the formal entrypoint is the compiled `local-relay-gateway.exe`. On first run without local runtime config, it opens a console, listens on `127.0.0.1:8787`, and opens `http://127.0.0.1:8787/admin/setup`; after saving `Local API Key`, it redirects to `/admin/stations`. Restart once after configuring stations and mappings before pointing clients at it.
+
+Windows 无环境变量启动时，本地配置和数据库默认保存在：  
+For Windows startup without runtime environment variables, local files are stored at:
+
+- `%LocalAppData%\LocalRelayGateway\runtime.json`
+- `%LocalAppData%\LocalRelayGateway\local-relay-gateway.db`
 
 先设置本地网关密钥并启动进程；`LRG_LISTEN_ADDR` 和 `LRG_DB_PATH` 是可选覆盖项。  
 Set the local gateway key and start the process; `LRG_LISTEN_ADDR` and `LRG_DB_PATH` are optional overrides.
@@ -142,6 +153,8 @@ export ANTHROPIC_API_KEY="replace-this-key"
 ## Admin UI 指南 / Admin UI Guide
 
 - `/admin` 会重定向到 `/admin/stations`。 / `/admin` redirects to `/admin/stations`.
+- `/admin/setup` 用来首次保存本地 `Local API Key`。保存后继续配置站点，并重启一次让客户端鉴权正式生效。 / `/admin/setup` saves the local `Local API Key` on first run. After saving, configure stations and restart once for client authentication to take effect.
+- `/admin/runtime` 用来复制本地 OpenAI / Anthropic 入口、显示或复制本地 key、修改本地 key；修改后需要重启。 / `/admin/runtime` copies local OpenAI / Anthropic endpoints, shows or copies the local key, and updates the local key; changes require a restart.
 - `/admin/stations` 用来新增、查看和编辑站点。首次空库时会显示双语快速配置面板。 / `/admin/stations` creates, lists, and edits stations. It shows a bilingual quick-setup panel on an empty database.
 - `/admin/mappings` 用来建立别名映射。 / `/admin/mappings` creates alias mappings.
 - `/admin/status` 展示每个站点的状态、冷却时间、失败数和恢复数。 / `/admin/status` shows station state, cooldown time, failures, and recoveries.
@@ -183,8 +196,8 @@ OpenAI 站点通常填到 `.../openai`，Anthropic 站点通常填到 `.../anthr
 For OpenAI, the station URL should usually end at `.../openai`; for Anthropic, it should usually end at `.../anthropic`. The gateway appends the versioned route itself.
 
 **数据库在哪里？**  
-默认是工作目录下的 `local-relay-gateway.db`，可以用 `LRG_DB_PATH` 改成其他本地 SQLite 文件。  
-By default it is `local-relay-gateway.db` in the working directory. Override it with `LRG_DB_PATH` to use a different local SQLite file.
+Windows 无环境变量启动时默认是 `%LocalAppData%\LocalRelayGateway\local-relay-gateway.db`；环境变量启动时默认是工作目录下的 `local-relay-gateway.db`，也可以用 `LRG_DB_PATH` 改成其他本地 SQLite 文件。  
+On Windows startup without runtime environment variables, the default is `%LocalAppData%\LocalRelayGateway\local-relay-gateway.db`; in environment-driven startup, the default is `local-relay-gateway.db` in the working directory. Override it with `LRG_DB_PATH` to use a different local SQLite file.
 
 **可以绑定到非 localhost 吗？**  
 可以，通过 `LRG_LISTEN_ADDR` 修改；但这会让本地 Admin 和代理入口暴露到更广的网络范围，应该配合额外访问控制。  

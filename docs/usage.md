@@ -18,7 +18,40 @@ This guide is for day-to-day operators of the local gateway, covering startup, s
 - 默认使用浏览器访问管理页面，不依赖桌面 GUI 框架。 / The admin UI is browser-based and does not require a desktop GUI framework.
 - 默认数据库是工作目录下的 SQLite 文件。 / The default database is a SQLite file in the working directory.
 
-## Windows 启动 / Windows Startup
+## Windows 双击启动 / Windows Double-Click Startup
+
+编译后的 `local-relay-gateway.exe` 可以直接双击运行。没有设置 `LRG_LOCAL_API_KEY`、`LRG_LISTEN_ADDR`、`LRG_DB_PATH` 时，Windows 会进入本地文件引导模式。  
+The compiled `local-relay-gateway.exe` can be started by double-clicking it. If `LRG_LOCAL_API_KEY`, `LRG_LISTEN_ADDR`, and `LRG_DB_PATH` are not set, Windows enters local file bootstrap mode.
+
+第一次启动时：  
+On first startup:
+
+1. 程序创建 `%LocalAppData%\LocalRelayGateway\`。  
+   The process creates `%LocalAppData%\LocalRelayGateway\`.
+2. 程序监听 `127.0.0.1:8787` 并打开 `http://127.0.0.1:8787/admin/setup`。  
+   The process listens on `127.0.0.1:8787` and opens `http://127.0.0.1:8787/admin/setup`.
+3. 在页面填写并保存 `Local API Key`。  
+   Enter and save `Local API Key`.
+4. 页面跳转到 `/admin/stations`，继续添加站点和映射。  
+   The page redirects to `/admin/stations`; continue adding stations and mappings.
+5. 配置完成后重启一次，再让 Codex CLI 或 Claude Code 接入。  
+   Restart once after configuration, then point Codex CLI or Claude Code at the gateway.
+
+本地文件位置：  
+Local file locations:
+
+| 文件 / File | 路径 / Path |
+| --- | --- |
+| 运行时配置 / Runtime config | `%LocalAppData%\LocalRelayGateway\runtime.json` |
+| SQLite 数据库 / SQLite database | `%LocalAppData%\LocalRelayGateway\local-relay-gateway.db` |
+
+后续再次双击启动时，如果 `runtime.json` 已存在并包含 `local_api_key`，程序会直接打开 `/admin/stations`。  
+On later double-click startups, if `runtime.json` exists and contains `local_api_key`, the process opens `/admin/stations` directly.
+
+`/admin/runtime` 可以复制本地 OpenAI / Anthropic 入口，显示或复制本地 key，也可以修改本地 key。修改后页面会提示重启；当前进程继续使用旧 key，新 key 在重启后生效。  
+`/admin/runtime` can copy local OpenAI / Anthropic endpoints, reveal or copy the local key, and update the local key. After saving, the page asks for a restart; the current process keeps using the old key until restart.
+
+## Windows 环境变量启动 / Windows Environment Startup
 
 建议先在 PowerShell 会话里设置环境变量，再直接从源码启动。只想临时运行时，用 `$env:` 即可；需要长期保存时再改系统级环境变量。  
 Set environment variables in your PowerShell session first, then run from source. Use `$env:` for temporary sessions; switch to persistent system variables only if you need them.
@@ -76,13 +109,14 @@ If you simply close the terminal window, the foreground process usually ends as 
 
 ## 第一次打开 Admin / First Admin Session
 
-首次空库启动时，`/admin/stations` 页面会在表单上方显示双语快速配置面板。  
-On a first run with an empty database, `/admin/stations` shows a bilingual quick-setup panel above the form.
+Windows 文件引导模式下，首次打开的是 `/admin/setup`，用于保存本地 `Local API Key`。环境变量启动或已经完成运行时配置后，`/admin/stations` 会在空库时显示双语快速配置面板。  
+In Windows file bootstrap mode, first launch opens `/admin/setup` to save the local `Local API Key`. In environment startup, or after runtime setup is complete, `/admin/stations` shows a bilingual quick-setup panel when the database is empty.
 
 当前实现里，`/admin` 会重定向到 `/admin/stations`，其余常用页面是：  
 In the current build, `/admin` redirects to `/admin/stations`, and the other useful pages are:
 
 - `/admin/mappings`
+- `/admin/runtime`
 - `/admin/status`
 - `/admin/logs`
 
@@ -283,5 +317,9 @@ Confirm that this station really has `anthropic_base_url` and `anthropic_api_key
 First check whether the upstream keeps returning `429` or `5xx`, then verify that the health probe endpoint for that protocol is reachable: `.../models` for OpenAI stations and `.../v1/messages` for Anthropic-only stations.
 
 **数据库文件位置不对。**  
-默认文件名是 `local-relay-gateway.db`；如果希望放到其他盘符或目录，显式设置 `LRG_DB_PATH`。  
-The default database file is `local-relay-gateway.db`; set `LRG_DB_PATH` explicitly if you want it on another drive or directory.
+Windows 双击启动且未设置环境变量时，默认路径是 `%LocalAppData%\LocalRelayGateway\local-relay-gateway.db`；环境变量启动时默认文件名是 `local-relay-gateway.db`。如果希望放到其他盘符或目录，显式设置 `LRG_DB_PATH`。  
+When double-click startup on Windows runs without environment variables, the default path is `%LocalAppData%\LocalRelayGateway\local-relay-gateway.db`; environment startup defaults to `local-relay-gateway.db`. Set `LRG_DB_PATH` explicitly if you want it on another drive or directory.
+
+**修改了 `/admin/runtime` 里的 Local API Key，但客户端还是旧行为。**  
+这是预期行为。运行时 key 保存到 `runtime.json` 后需要重启进程才会生效，当前进程继续使用启动时读到的旧 key。  
+This is expected. Runtime key changes are saved to `runtime.json` but take effect only after restart; the current process keeps using the key it loaded at startup.
