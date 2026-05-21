@@ -2,6 +2,12 @@ package config
 
 import "os"
 
+const (
+	DefaultListenAddr      = "127.0.0.1:8787"
+	DefaultDBFileName      = "local-relay-gateway.db"
+	DefaultRuntimeFileName = "runtime.json"
+)
+
 type Runtime struct {
 	ListenAddr  string
 	DBPath      string
@@ -10,8 +16,8 @@ type Runtime struct {
 
 func Load() Runtime {
 	return Runtime{
-		ListenAddr:  envOrDefault("LRG_LISTEN_ADDR", "127.0.0.1:8787"),
-		DBPath:      envOrDefault("LRG_DB_PATH", "local-relay-gateway.db"),
+		ListenAddr:  envOrDefault("LRG_LISTEN_ADDR", DefaultListenAddr),
+		DBPath:      envOrDefault("LRG_DB_PATH", DefaultDBFileName),
 		LocalAPIKey: envOrDefault("LRG_LOCAL_API_KEY", "change-me-local-key"),
 	}
 }
