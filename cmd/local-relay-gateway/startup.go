@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -11,6 +12,11 @@ import (
 
 	"relay-gateway/internal/config"
 )
+
+type browserCommand struct {
+	name string
+	args []string
+}
 
 func selectStartupMode(goos string, hasRuntimeEnv bool) config.StartupMode {
 	if hasRuntimeEnv {
@@ -70,8 +76,51 @@ func openBrowser(target string) error {
 	if runtime.GOOS != "windows" {
 		return nil
 	}
-	if target == "" {
-		return fmt.Errorf("browser target is empty")
+
+	commands, err := browserCommands(target, os.Getenv("SystemRoot"))
+	if err != nil {
+		return err
 	}
-	return exec.Command("rundll32", "url.dll,FileProtocolHandler", target).Start()
+
+	var errs []error
+	for _, command := range commands {
+		if err := exec.Command(command.name, command.args...).Start(); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", command.name, err))
+			continue
+		}
+		return nil
+	}
+
+	return fmt.Errorf("open browser failed: %w", errors.Join(errs...))
+}
+
+func browserCommands(target string, systemRoot string) ([]browserCommand, error) {
+	if target == "" {
+		return nil, fmt.Errorf("browser target is empty")
+	}
+
+	commands := make([]browserCommand, 0, 3)
+	if systemRoot != "" {
+		rundll32 := filepath.Join(systemRoot, "System32", "rundll32.exe")
+		if _, err := os.Stat(rundll32); err == nil {
+			commands = append(commands, browserCommand{
+				name: rundll32,
+				args: []string{"url.dll,FileProtocolHandler", target},
+			})
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("check Windows browser launcher: %w", err)
+		}
+	}
+
+	commands = append(commands,
+		browserCommand{
+			name: "rundll32",
+			args: []string{"url.dll,FileProtocolHandler", target},
+		},
+		browserCommand{
+			name: "cmd",
+			args: []string{"/c", "start", "", target},
+		},
+	)
+	return commands, nil
 }

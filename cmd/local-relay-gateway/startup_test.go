@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -42,5 +44,28 @@ func TestLoadBootstrapReturnsClearErrorWhenWindowsLocalAppDataIsEmpty(t *testing
 	}
 	if !strings.Contains(err.Error(), "LOCALAPPDATA") {
 		t.Fatalf("loadBootstrapFor error = %q, want LOCALAPPDATA context", err.Error())
+	}
+}
+
+func TestBrowserCommandsPreferSystemRootRundll32(t *testing.T) {
+	systemRoot := t.TempDir()
+	system32 := filepath.Join(systemRoot, "System32")
+	if err := os.Mkdir(system32, 0o755); err != nil {
+		t.Fatalf("mkdir System32: %v", err)
+	}
+	rundll32 := filepath.Join(system32, "rundll32.exe")
+	if err := os.WriteFile(rundll32, nil, 0o644); err != nil {
+		t.Fatalf("write rundll32: %v", err)
+	}
+
+	commands, err := browserCommands("http://127.0.0.1:8787/admin/setup", systemRoot)
+	if err != nil {
+		t.Fatalf("browserCommands error = %v", err)
+	}
+	if len(commands) == 0 {
+		t.Fatal("browserCommands returned no commands")
+	}
+	if commands[0].name != rundll32 {
+		t.Fatalf("first browser command = %q, want %q", commands[0].name, rundll32)
 	}
 }
