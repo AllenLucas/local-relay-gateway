@@ -25,6 +25,17 @@ type Station struct {
 	AnthropicAPIKey              string
 }
 
+func (s Station) SupportsProtocol(protocol Protocol) bool {
+	switch protocol {
+	case ProtocolOpenAI:
+		return s.OpenAIBaseURL != "" && s.OpenAIAPIKey != ""
+	case ProtocolAnthropic:
+		return s.AnthropicBaseURL != "" && s.AnthropicAPIKey != ""
+	default:
+		return false
+	}
+}
+
 type ModelMapping struct {
 	ID            int64
 	StationID     int64

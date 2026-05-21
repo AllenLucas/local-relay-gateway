@@ -146,6 +146,71 @@ func TestUpsertModelMappingRejectsUnknownStationID(t *testing.T) {
 	}
 }
 
+func TestStoreUpdatesStationAndAllowsSingleProtocolConfig(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	stationID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "primary-a",
+		Enabled:                      true,
+		Priority:                     10,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                "https://a.example.com/openai",
+		OpenAIAPIKey:                 "OPENAI_A",
+		AnthropicBaseURL:             "",
+		AnthropicAPIKey:              "",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation error = %v", err)
+	}
+
+	err = store.UpdateStation(ctx, core.Station{
+		ID:                           stationID,
+		Name:                         "primary-a-renamed",
+		Enabled:                      false,
+		Priority:                     50,
+		CooldownSeconds:              45,
+		HealthCheckIntervalSeconds:   20,
+		HealthCheckTimeoutSeconds:    8,
+		ConsecutiveFailureThreshold:  2,
+		ConsecutiveRecoveryThreshold: 3,
+		OpenAIBaseURL:                "",
+		OpenAIAPIKey:                 "",
+		AnthropicBaseURL:             "https://a.example.com/anthropic",
+		AnthropicAPIKey:              "ANTHROPIC_A",
+	})
+	if err != nil {
+		t.Fatalf("UpdateStation error = %v", err)
+	}
+
+	station, err := store.GetStation(ctx, stationID)
+	if err != nil {
+		t.Fatalf("GetStation error = %v", err)
+	}
+	if station.Name != "primary-a-renamed" {
+		t.Fatalf("Name = %q, want %q", station.Name, "primary-a-renamed")
+	}
+	if station.Enabled {
+		t.Fatalf("Enabled = %v, want false", station.Enabled)
+	}
+	if station.OpenAIBaseURL != "" || station.OpenAIAPIKey != "" {
+		t.Fatalf("OpenAI fields = %q / %q, want empty", station.OpenAIBaseURL, station.OpenAIAPIKey)
+	}
+	if station.AnthropicBaseURL != "https://a.example.com/anthropic" {
+		t.Fatalf("AnthropicBaseURL = %q, want %q", station.AnthropicBaseURL, "https://a.example.com/anthropic")
+	}
+}
+
 func TestStoreSummarizesUsageAndPrunesOldLogs(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gateway.db")

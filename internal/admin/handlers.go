@@ -18,6 +18,8 @@ var assets embed.FS
 
 type store interface {
 	CreateStation(ctx context.Context, station core.Station) (int64, error)
+	GetStation(ctx context.Context, stationID int64) (core.Station, error)
+	UpdateStation(ctx context.Context, station core.Station) error
 	ListStations(ctx context.Context) ([]core.Station, error)
 	ListMappings(ctx context.Context) ([]core.ModelMapping, error)
 	UpsertModelMapping(ctx context.Context, mapping core.ModelMapping) error
@@ -50,6 +52,8 @@ func NewHandler(store store, writeToken string) (http.Handler, error) {
 	mux.HandleFunc("/admin", handler.handleRoot)
 	mux.HandleFunc("/admin/", handler.handleRoot)
 	mux.HandleFunc("/admin/stations", handler.handleStations)
+	mux.HandleFunc("/admin/stations/edit", handler.handleStationEdit)
+	mux.HandleFunc("/admin/stations/update", handler.handleStationUpdate)
 	mux.HandleFunc("/admin/mappings", handler.handleMappings)
 	mux.HandleFunc("/admin/status", handler.handleStatus)
 	mux.HandleFunc("/admin/logs", handler.handleLogs)
@@ -85,23 +89,11 @@ func (h *Handler) handleStations(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		openAIBaseURL, err := parseRequiredText(r.Form.Get("openai_base_url"))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		openAIAPIKey, err := parseRequiredText(r.Form.Get("openai_api_key"))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		anthropicBaseURL, err := parseRequiredText(r.Form.Get("anthropic_base_url"))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		anthropicAPIKey, err := parseRequiredText(r.Form.Get("anthropic_api_key"))
-		if err != nil {
+		openAIBaseURL := strings.TrimSpace(r.Form.Get("openai_base_url"))
+		openAIAPIKey := strings.TrimSpace(r.Form.Get("openai_api_key"))
+		anthropicBaseURL := strings.TrimSpace(r.Form.Get("anthropic_base_url"))
+		anthropicAPIKey := strings.TrimSpace(r.Form.Get("anthropic_api_key"))
+		if err := validateStationProtocols(openAIBaseURL, openAIAPIKey, anthropicBaseURL, anthropicAPIKey); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -181,6 +173,78 @@ func (h *Handler) handleStations(w http.ResponseWriter, r *http.Request) {
 	if err := h.renderPage(w, "templates/stations.gohtml", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (h *Handler) handleStationEdit(w http.ResponseWriter, r *http.Request) {
+	stationID, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("id")), 10, 64)
+	if err != nil || stationID <= 0 {
+		http.Error(w, "invalid station id", http.StatusBadRequest)
+		return
+	}
+
+	station, err := h.store.GetStation(r.Context(), stationID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	stations, err := h.store.ListStations(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := StationsPage{
+		Title:                   "Stations",
+		WriteToken:              h.writeToken,
+		Stations:                stations,
+		EditStation:             &station,
+		ShowOnboarding:          len(stations) == 0,
+		DefaultListenAddr:       "127.0.0.1:8787",
+		ExampleOpenAIBaseURL:    "https://relay-a.example.invalid/openai",
+		ExampleAnthropicBaseURL: "https://relay-a.example.invalid/anthropic",
+		ExampleOpenAIAlias:      "gpt-5",
+		ExampleAnthropicAlias:   "claude-sonnet",
+		ExampleOpenAIModel:      "gpt-5.1",
+		ExampleAnthropicModel:   "claude-sonnet-4-5",
+	}
+	if err := h.renderPage(w, "templates/stations.gohtml", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (h *Handler) handleStationUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !h.isValidWriteToken(r.Form.Get("write_token")) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	stationID, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("id")), 10, 64)
+	if err != nil || stationID <= 0 {
+		http.Error(w, "invalid station id", http.StatusBadRequest)
+		return
+	}
+
+	station, err := parseStationForm(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	station.ID = stationID
+
+	if err := h.store.UpdateStation(r.Context(), station); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/admin/stations", http.StatusSeeOther)
 }
 
 func (h *Handler) handleMappings(w http.ResponseWriter, r *http.Request) {
@@ -320,6 +384,80 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) isValidWriteToken(value string) bool {
 	return h.writeToken != "" && value == h.writeToken
+}
+
+func parseStationForm(r *http.Request) (core.Station, error) {
+	name, err := parseRequiredText(r.Form.Get("name"))
+	if err != nil {
+		return core.Station{}, err
+	}
+
+	openAIBaseURL := strings.TrimSpace(r.Form.Get("openai_base_url"))
+	openAIAPIKey := strings.TrimSpace(r.Form.Get("openai_api_key"))
+	anthropicBaseURL := strings.TrimSpace(r.Form.Get("anthropic_base_url"))
+	anthropicAPIKey := strings.TrimSpace(r.Form.Get("anthropic_api_key"))
+	if err := validateStationProtocols(openAIBaseURL, openAIAPIKey, anthropicBaseURL, anthropicAPIKey); err != nil {
+		return core.Station{}, err
+	}
+
+	priority, err := parsePositiveInt(r.Form.Get("priority"))
+	if err != nil {
+		return core.Station{}, err
+	}
+	cooldownSeconds, err := parsePositiveInt(r.Form.Get("cooldown_seconds"))
+	if err != nil {
+		return core.Station{}, err
+	}
+	healthInterval, err := parsePositiveInt(r.Form.Get("health_check_interval_seconds"))
+	if err != nil {
+		return core.Station{}, err
+	}
+	healthTimeout, err := parsePositiveInt(r.Form.Get("health_check_timeout_seconds"))
+	if err != nil {
+		return core.Station{}, err
+	}
+	failureThreshold, err := parsePositiveInt(r.Form.Get("consecutive_failure_threshold"))
+	if err != nil {
+		return core.Station{}, err
+	}
+	recoveryThreshold, err := parsePositiveInt(r.Form.Get("consecutive_recovery_threshold"))
+	if err != nil {
+		return core.Station{}, err
+	}
+
+	return core.Station{
+		Name:                         name,
+		Enabled:                      r.Form.Get("enabled") == "on",
+		Priority:                     priority,
+		CooldownSeconds:              cooldownSeconds,
+		HealthCheckIntervalSeconds:   healthInterval,
+		HealthCheckTimeoutSeconds:    healthTimeout,
+		ConsecutiveFailureThreshold:  failureThreshold,
+		ConsecutiveRecoveryThreshold: recoveryThreshold,
+		OpenAIBaseURL:                openAIBaseURL,
+		OpenAIAPIKey:                 openAIAPIKey,
+		AnthropicBaseURL:             anthropicBaseURL,
+		AnthropicAPIKey:              anthropicAPIKey,
+	}, nil
+}
+
+func validateStationProtocols(openAIBaseURL string, openAIAPIKey string, anthropicBaseURL string, anthropicAPIKey string) error {
+	hasOpenAIBase := openAIBaseURL != ""
+	hasOpenAIKey := openAIAPIKey != ""
+	if hasOpenAIBase != hasOpenAIKey {
+		return errors.New("openai base url and api key must be provided together")
+	}
+
+	hasAnthropicBase := anthropicBaseURL != ""
+	hasAnthropicKey := anthropicAPIKey != ""
+	if hasAnthropicBase != hasAnthropicKey {
+		return errors.New("anthropic base url and api key must be provided together")
+	}
+
+	if !hasOpenAIBase && !hasAnthropicBase {
+		return errors.New("at least one protocol must be configured")
+	}
+	return nil
 }
 
 func parsePositiveInt(value string) (int, error) {

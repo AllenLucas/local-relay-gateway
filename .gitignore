@@ -1,0 +1,38 @@
+# Build outputs
+bin/
+dist/
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.out
+
+# Go caches
+.gocache/
+.gomodcache/
+coverage.out
+*.coverprofile
+
+# Local runtime state
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+local-relay-gateway.db
+
+# Temporary files
+*.log
+*.tmp
+*.temp
+
+# IDE and OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+
+# Process docs and local planning artifacts
+docs/superpowers/

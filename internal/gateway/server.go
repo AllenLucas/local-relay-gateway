@@ -19,6 +19,8 @@ import (
 
 type store interface {
 	CreateStation(ctx context.Context, station core.Station) (int64, error)
+	GetStation(ctx context.Context, stationID int64) (core.Station, error)
+	UpdateStation(ctx context.Context, station core.Station) error
 	ListStations(ctx context.Context) ([]core.Station, error)
 	ListMappings(ctx context.Context) ([]core.ModelMapping, error)
 	UpsertModelMapping(ctx context.Context, mapping core.ModelMapping) error
@@ -101,7 +103,8 @@ func (s *Server) handleNormalizedRequest(
 func (s *Server) authorize(r *http.Request, protocol core.Protocol) bool {
 	switch protocol {
 	case core.ProtocolAnthropic:
-		return r.Header.Get("x-api-key") == s.cfg.LocalAPIKey
+		return r.Header.Get("x-api-key") == s.cfg.LocalAPIKey ||
+			r.Header.Get("Authorization") == "Bearer "+s.cfg.LocalAPIKey
 	default:
 		return r.Header.Get("Authorization") == "Bearer "+s.cfg.LocalAPIKey
 	}

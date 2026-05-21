@@ -49,6 +49,9 @@ func TestGatewayServesOpenAIAndAnthropicProtocols(t *testing.T) {
 			if got := payload["model"]; got != "claude-sonnet-4-5" {
 				t.Fatalf("messages model = %v, want claude-sonnet-4-5", got)
 			}
+			if _, ok := payload["context_management"]; ok {
+				t.Fatalf("context_management should have been stripped: %#v", payload["context_management"])
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"anthropic-ok"}]}`))
 		default:
@@ -123,7 +126,7 @@ func TestGatewayServesOpenAIAndAnthropicProtocols(t *testing.T) {
 		t.Fatalf("openai body = %q", got)
 	}
 
-	anthropicReq := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", bytes.NewReader([]byte(`{"model":" claude-sonnet ","messages":[{"role":"user","content":"hello"}]}`)))
+	anthropicReq := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", bytes.NewReader([]byte(`{"model":" claude-sonnet ","messages":[{"role":"user","content":"hello"}],"context_management":{"clear_function_results":false}}`)))
 	anthropicReq.Header.Set("x-api-key", "local-test-key")
 	anthropicReq.Header.Set("Content-Type", "application/json")
 	anthropicResp := httptest.NewRecorder()

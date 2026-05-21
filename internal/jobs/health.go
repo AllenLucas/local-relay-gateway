@@ -43,7 +43,11 @@ func StartHealthLoop(ctx context.Context, store healthStore, selector *routing.S
 
 				for _, station := range stations {
 					status := statuses[station.ID]
-					req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL(station.OpenAIBaseURL), nil)
+					url := healthURL(station)
+					if url == "" {
+						continue
+					}
+					req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 					if err != nil {
 						continue
 					}
@@ -72,12 +76,16 @@ func StartHealthLoop(ctx context.Context, store healthStore, selector *routing.S
 	}()
 }
 
-func healthURL(baseURL string) string {
-	trimmed := strings.TrimRight(baseURL, "/")
-	if trimmed == "" {
-		return "/models"
+func healthURL(station core.Station) string {
+	if station.SupportsProtocol(core.ProtocolOpenAI) {
+		trimmed := strings.TrimRight(station.OpenAIBaseURL, "/")
+		return trimmed + "/models"
 	}
-	return trimmed + "/models"
+	if station.SupportsProtocol(core.ProtocolAnthropic) {
+		trimmed := strings.TrimRight(station.AnthropicBaseURL, "/")
+		return trimmed + "/v1/messages"
+	}
+	return ""
 }
 
 func healthCheckFailed(err error, resp *http.Response) bool {

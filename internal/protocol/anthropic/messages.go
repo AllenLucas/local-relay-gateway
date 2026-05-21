@@ -39,6 +39,9 @@ func NormalizeMessages(r *http.Request) (core.NormalizedRequest, error) {
 func BuildMessagesRequest(target core.ResolvedTarget, normalized core.NormalizedRequest) (*http.Request, error) {
 	bodyCopy := make(map[string]any, len(normalized.Body))
 	for key, value := range normalized.Body {
+		if key == "context_management" {
+			continue
+		}
 		bodyCopy[key] = value
 	}
 	bodyCopy["model"] = target.Mapping.UpstreamModel

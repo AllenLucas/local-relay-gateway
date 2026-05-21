@@ -130,6 +130,68 @@ func TestResponsesHandlerRejectsUnauthorizedRequest(t *testing.T) {
 	}
 }
 
+func TestAnthropicHandlerAcceptsBearerAuthorization(t *testing.T) {
+	upstreamCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}]}`))
+	}))
+	defer upstream.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	}()
+
+	ctx := context.Background()
+	stationID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "station-a",
+		Enabled:                      true,
+		Priority:                     20,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		AnthropicBaseURL:             upstream.URL,
+		AnthropicAPIKey:              "ANTHROPIC_A",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{
+		StationID:     stationID,
+		Protocol:      core.ProtocolAnthropic,
+		Alias:         "claude-sonnet",
+		UpstreamModel: "claude-sonnet-4-5",
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("UpsertModelMapping error = %v", err)
+	}
+
+	handler := gateway.NewServer(config.Runtime{LocalAPIKey: "local-test-key"}, store, routing.NewSelector(nil))
+
+	req := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", bytes.NewReader([]byte(`{"model":"claude-sonnet","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`)))
+	req.Header.Set("Authorization", "Bearer local-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if upstreamCalls != 1 {
+		t.Fatalf("upstreamCalls = %d, want 1", upstreamCalls)
+	}
+}
+
 func TestResponsesHandlerReturnsBadGatewayWhenAllUpstreamsFail(t *testing.T) {
 	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "overloaded", http.StatusTooManyRequests)

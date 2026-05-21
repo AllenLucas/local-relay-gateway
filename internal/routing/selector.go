@@ -47,6 +47,9 @@ func (s *Selector) Candidates(
 		if !station.Enabled {
 			continue
 		}
+		if !station.SupportsProtocol(req.Protocol) {
+			continue
+		}
 
 		mapping, ok := mappingByStation[station.ID]
 		if !ok {

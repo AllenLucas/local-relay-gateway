@@ -59,6 +59,75 @@ func (s *Store) CreateStation(ctx context.Context, station core.Station) (int64,
 	return result.LastInsertId()
 }
 
+func (s *Store) GetStation(ctx context.Context, stationID int64) (core.Station, error) {
+	row := s.db.QueryRowContext(ctx, `
+        SELECT id, name, enabled, priority, cooldown_seconds,
+               health_check_interval_seconds, health_check_timeout_seconds,
+               consecutive_failure_threshold, consecutive_recovery_threshold,
+               openai_base_url, openai_api_key, anthropic_base_url, anthropic_api_key
+        FROM stations
+        WHERE id = ?
+    `, stationID)
+
+	var station core.Station
+	var enabled int
+	if err := row.Scan(
+		&station.ID,
+		&station.Name,
+		&enabled,
+		&station.Priority,
+		&station.CooldownSeconds,
+		&station.HealthCheckIntervalSeconds,
+		&station.HealthCheckTimeoutSeconds,
+		&station.ConsecutiveFailureThreshold,
+		&station.ConsecutiveRecoveryThreshold,
+		&station.OpenAIBaseURL,
+		&station.OpenAIAPIKey,
+		&station.AnthropicBaseURL,
+		&station.AnthropicAPIKey,
+	); err != nil {
+		return core.Station{}, err
+	}
+	station.Enabled = enabled == 1
+	return station, nil
+}
+
+func (s *Store) UpdateStation(ctx context.Context, station core.Station) error {
+	result, err := s.db.ExecContext(ctx, `
+        UPDATE stations
+        SET name = ?, enabled = ?, priority = ?, cooldown_seconds = ?,
+            health_check_interval_seconds = ?, health_check_timeout_seconds = ?,
+            consecutive_failure_threshold = ?, consecutive_recovery_threshold = ?,
+            openai_base_url = ?, openai_api_key = ?, anthropic_base_url = ?, anthropic_api_key = ?
+        WHERE id = ?
+    `,
+		station.Name,
+		boolToInt(station.Enabled),
+		station.Priority,
+		station.CooldownSeconds,
+		station.HealthCheckIntervalSeconds,
+		station.HealthCheckTimeoutSeconds,
+		station.ConsecutiveFailureThreshold,
+		station.ConsecutiveRecoveryThreshold,
+		station.OpenAIBaseURL,
+		station.OpenAIAPIKey,
+		station.AnthropicBaseURL,
+		station.AnthropicAPIKey,
+		station.ID,
+	)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *Store) ListStations(ctx context.Context) ([]core.Station, error) {
 	rows, err := s.db.QueryContext(ctx, `
         SELECT id, name, enabled, priority, cooldown_seconds,

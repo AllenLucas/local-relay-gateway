@@ -12,7 +12,7 @@
     </li>
     <li>
       <strong>Step 2 / 第二步</strong><br>
-      Fill one station with both OpenAI and Anthropic upstream settings. / 为一个站点同时填写 OpenAI 和 Anthropic 上游配置。<br>
+      Fill one station with OpenAI settings, Anthropic settings, or both. / 为一个站点填写 OpenAI 配置、Anthropic 配置，或同时填写两者。<br>
       OpenAI base URL example: <code>{{.ExampleOpenAIBaseURL}}</code><br>
       Anthropic base URL example: <code>{{.ExampleAnthropicBaseURL}}</code>
     </li>
@@ -25,21 +25,26 @@
   </ol>
 </section>
 {{end}}
-<form method="post" action="/admin/stations" style="margin: 16px 0 24px 0; display: grid; gap: 8px; max-width: 960px;">
+{{if .EditStation}}
+<p>Editing station: <strong>{{.EditStation.Name}}</strong> / 正在编辑站点：<strong>{{.EditStation.Name}}</strong></p>
+{{end}}
+<form method="post" action="{{if .EditStation}}/admin/stations/update{{else}}/admin/stations{{end}}" style="margin: 16px 0 24px 0; display: grid; gap: 8px; max-width: 960px;">
   <input type="hidden" name="write_token" value="{{.WriteToken}}">
-  <input name="name" placeholder="Station name" required>
-  <label><input type="checkbox" name="enabled" checked> Enabled</label>
-  <input name="priority" type="number" value="10" placeholder="Priority">
-  <input name="cooldown_seconds" type="number" value="30" placeholder="Cooldown seconds">
-  <input name="health_check_interval_seconds" type="number" value="15" placeholder="Health interval seconds">
-  <input name="health_check_timeout_seconds" type="number" value="5" placeholder="Health timeout seconds">
-  <input name="consecutive_failure_threshold" type="number" value="1" placeholder="Failure threshold">
-  <input name="consecutive_recovery_threshold" type="number" value="2" placeholder="Recovery threshold">
-  <input name="openai_base_url" placeholder="OpenAI base URL" required>
-  <input name="openai_api_key" placeholder="OpenAI API key" required>
-  <input name="anthropic_base_url" placeholder="Anthropic base URL" required>
-  <input name="anthropic_api_key" placeholder="Anthropic API key" required>
-  <button type="submit">Save Station</button>
+  {{if .EditStation}}<input type="hidden" name="id" value="{{.EditStation.ID}}">{{end}}
+  <input name="name" placeholder="Station name" value="{{if .EditStation}}{{.EditStation.Name}}{{end}}" required>
+  <label><input type="checkbox" name="enabled" {{if .EditStation}}{{if .EditStation.Enabled}}checked{{end}}{{else}}checked{{end}}> Enabled</label>
+  <input name="priority" type="number" value="{{if .EditStation}}{{.EditStation.Priority}}{{else}}10{{end}}" placeholder="Priority">
+  <input name="cooldown_seconds" type="number" value="{{if .EditStation}}{{.EditStation.CooldownSeconds}}{{else}}30{{end}}" placeholder="Cooldown seconds">
+  <input name="health_check_interval_seconds" type="number" value="{{if .EditStation}}{{.EditStation.HealthCheckIntervalSeconds}}{{else}}15{{end}}" placeholder="Health interval seconds">
+  <input name="health_check_timeout_seconds" type="number" value="{{if .EditStation}}{{.EditStation.HealthCheckTimeoutSeconds}}{{else}}5{{end}}" placeholder="Health timeout seconds">
+  <input name="consecutive_failure_threshold" type="number" value="{{if .EditStation}}{{.EditStation.ConsecutiveFailureThreshold}}{{else}}1{{end}}" placeholder="Failure threshold">
+  <input name="consecutive_recovery_threshold" type="number" value="{{if .EditStation}}{{.EditStation.ConsecutiveRecoveryThreshold}}{{else}}2{{end}}" placeholder="Recovery threshold">
+  <input name="openai_base_url" placeholder="OpenAI base URL" value="{{if .EditStation}}{{.EditStation.OpenAIBaseURL}}{{end}}">
+  <input name="openai_api_key" placeholder="OpenAI API key" value="{{if .EditStation}}{{.EditStation.OpenAIAPIKey}}{{end}}">
+  <input name="anthropic_base_url" placeholder="Anthropic base URL" value="{{if .EditStation}}{{.EditStation.AnthropicBaseURL}}{{end}}">
+  <input name="anthropic_api_key" placeholder="Anthropic API key" value="{{if .EditStation}}{{.EditStation.AnthropicAPIKey}}{{end}}">
+  <p style="margin: 0; color: #51606f;">Configure OpenAI, Anthropic, or both. For each protocol, base URL and key must be filled together. / 可只配置 OpenAI、Anthropic，或两者同时配置。每种协议都必须同时填写 base URL 和 key。</p>
+  <button type="submit">{{if .EditStation}}Update Station{{else}}Save Station{{end}}</button>
 </form>
 
 <table>
@@ -50,6 +55,7 @@
       <th>Priority</th>
       <th>OpenAI Base URL</th>
       <th>Anthropic Base URL</th>
+      <th>Actions</th>
     </tr>
   </thead>
   <tbody>
@@ -60,10 +66,11 @@
       <td>{{.Priority}}</td>
       <td>{{.OpenAIBaseURL}}</td>
       <td>{{.AnthropicBaseURL}}</td>
+      <td><a href="/admin/stations/edit?id={{.ID}}">Edit</a></td>
     </tr>
     {{else}}
     <tr>
-      <td colspan="5">No stations configured yet.</td>
+      <td colspan="6">No stations configured yet.</td>
     </tr>
     {{end}}
   </tbody>

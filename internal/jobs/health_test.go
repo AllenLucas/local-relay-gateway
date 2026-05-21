@@ -4,11 +4,27 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+
+	"relay-gateway/internal/core"
 )
 
 func TestHealthURLUsesModelsEndpoint(t *testing.T) {
-	got := healthURL("https://station-a.example.com/openai/")
+	got := healthURL(core.Station{
+		OpenAIBaseURL: "https://station-a.example.com/openai/",
+		OpenAIAPIKey:  "OPENAI_A",
+	})
 	want := "https://station-a.example.com/openai/models"
+	if got != want {
+		t.Fatalf("healthURL() = %q, want %q", got, want)
+	}
+}
+
+func TestHealthURLUsesAnthropicMessagesEndpointWhenOpenAIIsNotConfigured(t *testing.T) {
+	got := healthURL(core.Station{
+		AnthropicBaseURL: "https://station-b.example.com/anthropic/",
+		AnthropicAPIKey:  "ANTHROPIC_B",
+	})
+	want := "https://station-b.example.com/anthropic/v1/messages"
 	if got != want {
 		t.Fatalf("healthURL() = %q, want %q", got, want)
 	}

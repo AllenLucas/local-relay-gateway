@@ -11,10 +11,10 @@ CREATE TABLE IF NOT EXISTS stations (
     health_check_timeout_seconds INTEGER NOT NULL,
     consecutive_failure_threshold INTEGER NOT NULL,
     consecutive_recovery_threshold INTEGER NOT NULL,
-    openai_base_url TEXT NOT NULL,
-    openai_api_key TEXT NOT NULL,
-    anthropic_base_url TEXT NOT NULL,
-    anthropic_api_key TEXT NOT NULL
+    openai_base_url TEXT NOT NULL DEFAULT '',
+    openai_api_key TEXT NOT NULL DEFAULT '',
+    anthropic_base_url TEXT NOT NULL DEFAULT '',
+    anthropic_api_key TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS model_mappings (

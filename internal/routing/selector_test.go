@@ -18,8 +18,8 @@ func TestCandidatesPreferHealthyPrimaryAndSkipCooldown(t *testing.T) {
 	}
 
 	stations := []core.Station{
-		{ID: 1, Name: "station-a", Enabled: true, Priority: 20, CooldownSeconds: 30},
-		{ID: 2, Name: "station-b", Enabled: true, Priority: 10, CooldownSeconds: 30},
+		{ID: 1, Name: "station-a", Enabled: true, Priority: 20, CooldownSeconds: 30, OpenAIBaseURL: "https://a.example.com/openai", OpenAIAPIKey: "OPENAI_A"},
+		{ID: 2, Name: "station-b", Enabled: true, Priority: 10, CooldownSeconds: 30, OpenAIBaseURL: "https://b.example.com/openai", OpenAIAPIKey: "OPENAI_B"},
 	}
 
 	mappings := []core.ModelMapping{
@@ -54,8 +54,8 @@ func TestCandidatesSkipDisabledMappings(t *testing.T) {
 	}
 
 	stations := []core.Station{
-		{ID: 1, Name: "station-a", Enabled: true, Priority: 20},
-		{ID: 2, Name: "station-b", Enabled: true, Priority: 10},
+		{ID: 1, Name: "station-a", Enabled: true, Priority: 20, OpenAIBaseURL: "https://a.example.com/openai", OpenAIAPIKey: "OPENAI_A"},
+		{ID: 2, Name: "station-b", Enabled: true, Priority: 10, OpenAIBaseURL: "https://b.example.com/openai", OpenAIAPIKey: "OPENAI_B"},
 	}
 
 	mappings := []core.ModelMapping{
@@ -85,7 +85,7 @@ func TestCandidatesExcludeCooldownStationUntilRecoveryMarksHealthy(t *testing.T)
 	}
 
 	stations := []core.Station{
-		{ID: 1, Name: "station-a", Enabled: true, Priority: 20},
+		{ID: 1, Name: "station-a", Enabled: true, Priority: 20, OpenAIBaseURL: "https://a.example.com/openai", OpenAIAPIKey: "OPENAI_A"},
 	}
 
 	mappings := []core.ModelMapping{
@@ -108,6 +108,8 @@ func TestCandidatesExcludeCooldownStationUntilRecoveryMarksHealthy(t *testing.T)
 		ID:                           1,
 		Name:                         "station-a",
 		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                "https://a.example.com/openai",
+		OpenAIAPIKey:                 "OPENAI_A",
 	}
 
 	recovered := selector.RecordSuccess(station, status)
@@ -121,6 +123,51 @@ func TestCandidatesExcludeCooldownStationUntilRecoveryMarksHealthy(t *testing.T)
 	}
 	if len(targets) != 1 {
 		t.Fatalf("len(targets) after recovery = %d, want 1", len(targets))
+	}
+}
+
+func TestCandidatesSkipStationsWithoutRequestedProtocolConfig(t *testing.T) {
+	now := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
+	selector := routing.NewSelector(func() time.Time { return now })
+
+	req := core.NormalizedRequest{
+		Protocol: core.ProtocolAnthropic,
+		Alias:    "claude-sonnet",
+	}
+
+	stations := []core.Station{
+		{
+			ID:            1,
+			Name:          "openai-only",
+			Enabled:       true,
+			Priority:      20,
+			OpenAIBaseURL: "https://a.example.com/openai",
+			OpenAIAPIKey:  "OPENAI_A",
+		},
+		{
+			ID:               2,
+			Name:             "anthropic-only",
+			Enabled:          true,
+			Priority:         10,
+			AnthropicBaseURL: "https://b.example.com/anthropic",
+			AnthropicAPIKey:  "ANTHROPIC_B",
+		},
+	}
+
+	mappings := []core.ModelMapping{
+		{StationID: 1, Protocol: core.ProtocolAnthropic, Alias: "claude-sonnet", UpstreamModel: "claude-sonnet-4-5", Enabled: true},
+		{StationID: 2, Protocol: core.ProtocolAnthropic, Alias: "claude-sonnet", UpstreamModel: "claude-sonnet-4-5", Enabled: true},
+	}
+
+	targets, err := selector.Candidates(req, stations, mappings, map[int64]core.StationStatus{})
+	if err != nil {
+		t.Fatalf("Candidates error = %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("len(targets) = %d, want 1", len(targets))
+	}
+	if targets[0].Station.Name != "anthropic-only" {
+		t.Fatalf("selected station = %q, want %q", targets[0].Station.Name, "anthropic-only")
 	}
 }
 

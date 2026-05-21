@@ -1,7 +1,7 @@
 # 本地 LLM 中转网关 / Local LLM Relay Gateway
 
-轻量级、本地优先、SQLite 持久化的多中转站 LLM 网关，适合在 Windows 上为 Codex CLI、Claude Code 和其他脚本工具提供一个稳定的本地入口。  
-Lightweight, localhost-first, SQLite-backed multi-relay LLM gateway for Windows, designed to give Codex CLI, Claude Code, and local automation one stable endpoint.
+轻量级、本地优先、SQLite 持久化的多中转站 LLM 网关，适合在 Windows、Linux 和 macOS 上为 Codex CLI、Claude Code 和其他脚本工具提供一个稳定的本地入口。  
+Lightweight, localhost-first, SQLite-backed multi-relay LLM gateway for Windows, Linux, and macOS, designed to give Codex CLI, Claude Code, and local automation one stable endpoint.
 
 ## 项目概览 / Overview
 
@@ -24,6 +24,12 @@ This project collapses multiple upstream OpenAI and Anthropic relays into one lo
 - 使用 SQLite 保存站点、映射、状态、请求日志和切换事件。 / Uses SQLite to persist stations, mappings, status, request logs, and failover events.
 - 提供本地 Admin UI 进行站点、映射、状态和日志排查。 / Includes a local admin UI for station, mapping, status, and log inspection.
 
+## 平台支持 / Platform Support
+
+- 支持 Windows、Linux 和 macOS；核心运行时不依赖平台专属 GUI。 / Supports Windows, Linux, and macOS; the runtime does not depend on any platform-specific GUI stack.
+- 管理界面是本地网页，三平台都通过浏览器访问同一套 `/admin/*` 页面。 / The admin UI is browser-based, so all three platforms use the same `/admin/*` pages.
+- SQLite 采用纯 Go 驱动，默认不需要额外安装系统级 SQLite 库。 / SQLite uses a pure-Go driver, so no separate system SQLite library is normally required.
+
 ## 适用场景 / Use Cases
 
 - 你希望 Codex CLI 永远连到同一个本地 `OPENAI_BASE_URL`，而不是直接面向具体中转站。 / You want Codex CLI to point at one stable local `OPENAI_BASE_URL` instead of a specific relay.
@@ -39,14 +45,21 @@ This project collapses multiple upstream OpenAI and Anthropic relays into one lo
 
 ## 快速开始 / Quick Start
 
-先在当前 PowerShell 会话中设置本地网关密钥并启动进程；`LRG_LISTEN_ADDR` 和 `LRG_DB_PATH` 是可选覆盖项。  
-Set the local gateway key in the current PowerShell session and start the process; `LRG_LISTEN_ADDR` and `LRG_DB_PATH` are optional overrides.
+先设置本地网关密钥并启动进程；`LRG_LISTEN_ADDR` 和 `LRG_DB_PATH` 是可选覆盖项。  
+Set the local gateway key and start the process; `LRG_LISTEN_ADDR` and `LRG_DB_PATH` are optional overrides.
 
 ```powershell
 $env:LRG_LOCAL_API_KEY="replace-this-key"
 $env:LRG_LISTEN_ADDR="127.0.0.1:8787"
 $env:LRG_DB_PATH=".\local-relay-gateway.db"
 & "C:\Program Files\Go\bin\go.exe" run .\cmd\local-relay-gateway
+```
+
+```bash
+export LRG_LOCAL_API_KEY="replace-this-key"
+export LRG_LISTEN_ADDR="127.0.0.1:8787"
+export LRG_DB_PATH="./local-relay-gateway.db"
+go run ./cmd/local-relay-gateway
 ```
 
 启动后打开这些页面：  
@@ -57,8 +70,8 @@ After startup, open these pages:
 
 ## 站点配置 / Station Configuration
 
-每个站点同时保存 OpenAI 和 Anthropic 的上游配置，因此通常一条站点记录就代表一套完整的中转能力。优先级数字越大越先被尝试。  
-Each station stores both OpenAI and Anthropic upstream settings, so one station record usually represents one complete relay target. Higher priority numbers are tried first.
+每个站点可以保存 OpenAI、Anthropic 或两者同时保存的上游配置；至少要完整填写一组协议。优先级数字越大越先被尝试。  
+Each station can store OpenAI settings, Anthropic settings, or both; at least one protocol must be configured as a complete pair. Higher priority numbers are tried first.
 
 推荐先建一个主站点，再按更低优先级补一个备用站点：  
 Create one primary station first, then add a lower-priority backup station:
@@ -100,6 +113,11 @@ $env:OPENAI_BASE_URL="http://127.0.0.1:8787/openai/v1"
 $env:OPENAI_API_KEY="replace-this-key"
 ```
 
+```bash
+export OPENAI_BASE_URL="http://127.0.0.1:8787/openai/v1"
+export OPENAI_API_KEY="replace-this-key"
+```
+
 ## Claude Code 配置 / Claude Code Setup
 
 Claude Code 走 Anthropic 兼容入口，使用同一个本地密钥。  
@@ -110,10 +128,15 @@ $env:ANTHROPIC_BASE_URL="http://127.0.0.1:8787/anthropic"
 $env:ANTHROPIC_API_KEY="replace-this-key"
 ```
 
+```bash
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8787/anthropic"
+export ANTHROPIC_API_KEY="replace-this-key"
+```
+
 ## Admin UI 指南 / Admin UI Guide
 
 - `/admin` 会重定向到 `/admin/stations`。 / `/admin` redirects to `/admin/stations`.
-- `/admin/stations` 用来新增和查看站点。首次空库时会显示双语快速配置面板。 / `/admin/stations` creates and lists stations. It shows a bilingual quick-setup panel on an empty database.
+- `/admin/stations` 用来新增、查看和编辑站点。首次空库时会显示双语快速配置面板。 / `/admin/stations` creates, lists, and edits stations. It shows a bilingual quick-setup panel on an empty database.
 - `/admin/mappings` 用来建立别名映射。 / `/admin/mappings` creates alias mappings.
 - `/admin/status` 展示每个站点的状态、冷却时间、失败数和恢复数。 / `/admin/status` shows station state, cooldown time, failures, and recoveries.
 - `/admin/logs` 展示请求日志、故障切换事件和用量统计。 / `/admin/logs` shows request logs, failover events, and usage summaries.
@@ -124,7 +147,7 @@ $env:ANTHROPIC_API_KEY="replace-this-key"
 - `429`、`5xx` 和传输错误会被当作失败并触发下一候选站点。 / `429`, `5xx`, and transport errors count as failures and trigger the next candidate station.
 - 连续失败达到阈值后，站点会进入 `cooldown`，直到 `cooldown_seconds` 到期。 / Once the failure threshold is reached, the station enters `cooldown` until `cooldown_seconds` expires.
 - 连续成功达到恢复阈值后，站点状态会回到 `healthy`。 / After enough consecutive recoveries, the station returns to `healthy`.
-- 当前实现的后台健康检查会每 15 秒请求一次 `OpenAIBaseURL + /models`，HTTP 客户端超时固定为 5 秒。 / The current background health check probes `OpenAIBaseURL + /models` every 15 seconds with a fixed 5 second HTTP client timeout.
+- 当前实现的后台健康检查会每 15 秒探测一次已配置协议；优先使用 `OpenAIBaseURL + /models`，否则回退到 `AnthropicBaseURL + /v1/messages`，HTTP 客户端超时固定为 5 秒。 / The current background health check probes the configured protocol every 15 seconds; it prefers `OpenAIBaseURL + /models` and otherwise falls back to `AnthropicBaseURL + /v1/messages`, with a fixed 5 second HTTP client timeout.
 
 ## 开发与测试 / Development and Testing
 
@@ -135,11 +158,15 @@ Running and testing from source is the simplest path; the full test command is b
 & "C:\Program Files\Go\bin\go.exe" test ./...
 ```
 
+```bash
+go test ./...
+```
+
 ## 常见问题 / FAQ
 
 **为什么请求返回 `401 unauthorized`？**  
-通常是本地客户端配置的密钥和 `LRG_LOCAL_API_KEY` 不一致；OpenAI 路由需要 `Authorization: Bearer`，Anthropic 路由需要 `x-api-key`。  
-Usually the client key does not match `LRG_LOCAL_API_KEY`; OpenAI routes require `Authorization: Bearer` and Anthropic routes require `x-api-key`.
+通常是本地客户端配置的密钥和 `LRG_LOCAL_API_KEY` 不一致；OpenAI 路由需要 `Authorization: Bearer`，Anthropic 路由兼容 `x-api-key` 和 `Authorization: Bearer`。  
+Usually the client key does not match `LRG_LOCAL_API_KEY`; OpenAI routes require `Authorization: Bearer`, and Anthropic routes accept either `x-api-key` or `Authorization: Bearer`.
 
 **为什么提示 `no eligible upstream station`？**  
 检查站点是否启用、对应协议是否存在已启用的别名映射、以及站点是否正处于 `cooldown`。  

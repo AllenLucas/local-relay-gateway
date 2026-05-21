@@ -6,6 +6,7 @@ type StationsPage struct {
 	Title      string
 	WriteToken string
 	Stations   []core.Station
+	EditStation *core.Station
 
 	ShowOnboarding          bool
 	DefaultListenAddr       string

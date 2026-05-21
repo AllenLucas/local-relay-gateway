@@ -441,10 +441,6 @@ func TestStationCreatePostRejectsBlankRequiredFields(t *testing.T) {
 		value string
 	}{
 		{name: "blank name", field: "name", value: "   "},
-		{name: "blank openai base url", field: "openai_base_url", value: "   "},
-		{name: "blank openai api key", field: "openai_api_key", value: "   "},
-		{name: "blank anthropic base url", field: "anthropic_base_url", value: "   "},
-		{name: "blank anthropic api key", field: "anthropic_api_key", value: "   "},
 	}
 
 	for _, tc := range testCases {
@@ -481,6 +477,238 @@ func TestStationCreatePostRejectsBlankRequiredFields(t *testing.T) {
 				t.Fatalf("len(stations) = %d, want 0", len(stations))
 			}
 		})
+	}
+}
+
+func TestStationCreatePostAllowsOpenAIOnlyStation(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	handler, err := admin.NewHandler(store, adminWriteToken)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	form := validStationForm()
+	form.Set("anthropic_base_url", "")
+	form.Set("anthropic_api_key", "")
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/stations", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+
+	stations, err := store.ListStations(context.Background())
+	if err != nil {
+		t.Fatalf("ListStations error = %v", err)
+	}
+	if len(stations) != 1 {
+		t.Fatalf("len(stations) = %d, want 1", len(stations))
+	}
+	if stations[0].OpenAIBaseURL == "" || stations[0].OpenAIAPIKey == "" {
+		t.Fatalf("openai fields were not saved: %+v", stations[0])
+	}
+	if stations[0].AnthropicBaseURL != "" || stations[0].AnthropicAPIKey != "" {
+		t.Fatalf("anthropic fields = %q / %q, want empty", stations[0].AnthropicBaseURL, stations[0].AnthropicAPIKey)
+	}
+}
+
+func TestStationCreatePostAllowsAnthropicOnlyStation(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	handler, err := admin.NewHandler(store, adminWriteToken)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	form := validStationForm()
+	form.Set("openai_base_url", "")
+	form.Set("openai_api_key", "")
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/stations", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+
+	stations, err := store.ListStations(context.Background())
+	if err != nil {
+		t.Fatalf("ListStations error = %v", err)
+	}
+	if len(stations) != 1 {
+		t.Fatalf("len(stations) = %d, want 1", len(stations))
+	}
+	if stations[0].AnthropicBaseURL == "" || stations[0].AnthropicAPIKey == "" {
+		t.Fatalf("anthropic fields were not saved: %+v", stations[0])
+	}
+	if stations[0].OpenAIBaseURL != "" || stations[0].OpenAIAPIKey != "" {
+		t.Fatalf("openai fields = %q / %q, want empty", stations[0].OpenAIBaseURL, stations[0].OpenAIAPIKey)
+	}
+}
+
+func TestStationCreatePostRejectsIncompleteProtocolPairs(t *testing.T) {
+	testCases := []struct {
+		name  string
+		field string
+		value string
+	}{
+		{name: "openai base without key", field: "openai_api_key", value: ""},
+		{name: "openai key without base", field: "openai_base_url", value: ""},
+		{name: "anthropic base without key", field: "anthropic_api_key", value: ""},
+		{name: "anthropic key without base", field: "anthropic_base_url", value: ""},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "gateway.db")
+			store, err := sqlitestore.NewStore(dbPath)
+			if err != nil {
+				t.Fatalf("NewStore error = %v", err)
+			}
+			defer store.Close()
+
+			handler, err := admin.NewHandler(store, adminWriteToken)
+			if err != nil {
+				t.Fatalf("NewHandler error = %v", err)
+			}
+
+			form := validStationForm()
+			form.Set(tc.field, tc.value)
+
+			req := httptest.NewRequest(http.MethodPost, "/admin/stations", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+func TestStationCreatePostRejectsWhenNoProtocolConfigured(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	handler, err := admin.NewHandler(store, adminWriteToken)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	form := validStationForm()
+	form.Set("openai_base_url", "")
+	form.Set("openai_api_key", "")
+	form.Set("anthropic_base_url", "")
+	form.Set("anthropic_api_key", "")
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/stations", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
+func TestStationEditPageAndUpdatePostModifySavedStation(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	stationID, err := createAdminTestStation(store, "station-a")
+	if err != nil {
+		t.Fatalf("CreateStation error = %v", err)
+	}
+
+	handler, err := admin.NewHandler(store, adminWriteToken)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/stations/edit?id=1", nil)
+	getRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(getRecorder, getReq)
+
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("edit page status = %d, want %d", getRecorder.Code, http.StatusOK)
+	}
+	if !strings.Contains(getRecorder.Body.String(), `value="station-a"`) {
+		t.Fatalf("edit page did not contain station name: %s", getRecorder.Body.String())
+	}
+	if !strings.Contains(getRecorder.Body.String(), `action="/admin/stations/update"`) {
+		t.Fatalf("edit page did not contain update action: %s", getRecorder.Body.String())
+	}
+
+	form := validStationForm()
+	form.Set("id", "1")
+	form.Set("name", "station-a-renamed")
+	form.Set("priority", "50")
+	form.Set("openai_base_url", "")
+	form.Set("openai_api_key", "")
+	form.Set("anthropic_base_url", "https://b.example.com/anthropic")
+	form.Set("anthropic_api_key", "ANTHROPIC_B")
+
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/stations/update", strings.NewReader(form.Encode()))
+	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(postRecorder, postReq)
+
+	if postRecorder.Code != http.StatusSeeOther {
+		t.Fatalf("update status = %d, want %d", postRecorder.Code, http.StatusSeeOther)
+	}
+	if got := postRecorder.Header().Get("Location"); got != "/admin/stations" {
+		t.Fatalf("redirect location = %q, want %q", got, "/admin/stations")
+	}
+
+	stations, err := store.ListStations(context.Background())
+	if err != nil {
+		t.Fatalf("ListStations error = %v", err)
+	}
+	if len(stations) != 1 {
+		t.Fatalf("len(stations) = %d, want 1", len(stations))
+	}
+	if stations[0].ID != stationID {
+		t.Fatalf("id = %d, want %d", stations[0].ID, stationID)
+	}
+	if stations[0].Name != "station-a-renamed" {
+		t.Fatalf("name = %q, want %q", stations[0].Name, "station-a-renamed")
+	}
+	if stations[0].Priority != 50 {
+		t.Fatalf("priority = %d, want %d", stations[0].Priority, 50)
+	}
+	if stations[0].OpenAIBaseURL != "" || stations[0].OpenAIAPIKey != "" {
+		t.Fatalf("openai fields = %q / %q, want empty", stations[0].OpenAIBaseURL, stations[0].OpenAIAPIKey)
+	}
+	if stations[0].AnthropicBaseURL != "https://b.example.com/anthropic" {
+		t.Fatalf("anthropic base = %q, want %q", stations[0].AnthropicBaseURL, "https://b.example.com/anthropic")
+	}
+	if stations[0].AnthropicAPIKey != "ANTHROPIC_B" {
+		t.Fatalf("anthropic key = %q, want %q", stations[0].AnthropicAPIKey, "ANTHROPIC_B")
 	}
 }
 
