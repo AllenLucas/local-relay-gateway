@@ -78,13 +78,18 @@ func main() {
 }
 
 func serveHTTP(ctx context.Context, server *http.Server, listener net.Listener, onReady func(), onShutdown func()) error {
+	listenerAddr := listener.Addr().String()
 	errCh := make(chan error, 1)
 	go func() {
-		if onReady != nil {
-			onReady()
-		}
 		errCh <- server.Serve(listener)
 	}()
+	if onReady != nil {
+		go func() {
+			if waitForReady(ctx, listenerAddr, 2*time.Second) {
+				onReady()
+			}
+		}()
+	}
 
 	select {
 	case err := <-errCh:
@@ -108,6 +113,31 @@ func serveHTTP(ctx context.Context, server *http.Server, listener net.Listener, 
 			return nil
 		}
 		return err
+	}
+}
+
+func waitForReady(ctx context.Context, addr string, timeout time.Duration) bool {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			return false
+		case <-ticker.C:
+			resp, err := http.Get("http://" + addr + "/healthz")
+			if err != nil {
+				continue
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return true
+			}
+		}
 	}
 }
 

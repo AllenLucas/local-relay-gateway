@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +11,8 @@ import (
 	"testing"
 	"time"
 )
+
+var errUnexpectedReadyHealthz = errors.New("unexpected healthz response during ready callback")
 
 func TestNewRootHandlerServesHealthzAndDelegatesGateway(t *testing.T) {
 	gatewayHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -130,5 +134,60 @@ func TestServeHTTPInvokesOnReadyBeforeShutdown(t *testing.T) {
 
 	if !shutdownSawReady.Load() {
 		t.Fatal("shutdown callback ran before ready callback")
+	}
+}
+
+func TestServeHTTPServesHealthzWhenReadyCallbackRuns(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen error = %v", err)
+	}
+	addr := listener.Addr().String()
+
+	server := &http.Server{Handler: newRootHandler(http.NotFoundHandler())}
+	readyErr := make(chan error, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- serveHTTP(ctx, server, listener, func() {
+			resp, err := http.Get("http://" + addr + "/healthz")
+			if err != nil {
+				readyErr <- err
+				return
+			}
+			defer resp.Body.Close()
+
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				readyErr <- err
+				return
+			}
+			if resp.StatusCode != http.StatusOK || string(body) != "ok" {
+				readyErr <- errUnexpectedReadyHealthz
+				return
+			}
+			readyErr <- nil
+		}, nil)
+	}()
+
+	select {
+	case err := <-readyErr:
+		if err != nil {
+			t.Fatalf("healthz during ready callback error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ready callback did not complete")
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("serveHTTP error = %v, want nil", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("serveHTTP did not exit after context cancellation")
 	}
 }
