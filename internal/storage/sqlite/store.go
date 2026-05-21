@@ -196,6 +196,68 @@ func (s *Store) UpsertModelMapping(ctx context.Context, mapping core.ModelMappin
 	return err
 }
 
+func (s *Store) GetMapping(ctx context.Context, mappingID int64) (core.ModelMapping, error) {
+	row := s.db.QueryRowContext(ctx, `
+        SELECT id, station_id, protocol, alias, upstream_model, enabled
+        FROM model_mappings
+        WHERE id = ?
+    `, mappingID)
+
+	var mapping core.ModelMapping
+	var enabled int
+	var protocolValue string
+	if err := row.Scan(
+		&mapping.ID,
+		&mapping.StationID,
+		&protocolValue,
+		&mapping.Alias,
+		&mapping.UpstreamModel,
+		&enabled,
+	); err != nil {
+		return core.ModelMapping{}, err
+	}
+	mapping.Protocol = core.Protocol(protocolValue)
+	mapping.Enabled = enabled == 1
+	return mapping, nil
+}
+
+func (s *Store) UpdateModelMapping(ctx context.Context, mapping core.ModelMapping) error {
+	if !isSupportedProtocol(mapping.Protocol) {
+		return fmt.Errorf("unsupported protocol: %q", mapping.Protocol)
+	}
+	exists, err := s.stationExists(ctx, mapping.StationID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("unknown station_id: %d", mapping.StationID)
+	}
+
+	result, err := s.db.ExecContext(ctx, `
+        UPDATE model_mappings
+        SET station_id = ?, protocol = ?, alias = ?, upstream_model = ?, enabled = ?
+        WHERE id = ?
+    `,
+		mapping.StationID,
+		string(mapping.Protocol),
+		mapping.Alias,
+		mapping.UpstreamModel,
+		boolToInt(mapping.Enabled),
+		mapping.ID,
+	)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *Store) FindMappings(ctx context.Context, protocol core.Protocol, alias string) ([]core.ModelMapping, error) {
 	if !isSupportedProtocol(protocol) {
 		return nil, fmt.Errorf("unsupported protocol: %q", protocol)

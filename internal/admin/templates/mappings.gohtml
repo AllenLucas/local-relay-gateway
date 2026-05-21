@@ -1,45 +1,51 @@
 {{define "content"}}
 <h1>Mappings</h1>
-<form method="post" action="/admin/mappings" style="margin: 16px 0 24px 0; display: grid; gap: 8px; max-width: 640px;">
+<form method="post" action="{{if .EditMapping}}/admin/mappings/update{{else}}/admin/mappings{{end}}" style="margin: 16px 0 24px 0; display: grid; gap: 8px; max-width: 640px;">
   <input type="hidden" name="write_token" value="{{.WriteToken}}">
+  {{if .EditMapping}}<input type="hidden" name="id" value="{{.EditMapping.ID}}">{{end}}
   <select name="station_id" required>
     <option value="">Select station</option>
     {{range .Stations}}
-    <option value="{{.ID}}">{{.Name}}</option>
+    <option value="{{.ID}}" {{if and $.EditMapping (eq .ID $.EditMapping.StationID)}}selected{{end}}>{{.Name}} (ID {{.ID}})</option>
     {{end}}
   </select>
   <select name="protocol" required>
-    <option value="openai">openai</option>
-    <option value="anthropic">anthropic</option>
+    <option value="openai" {{if and .EditMapping (eq (printf "%s" .EditMapping.Protocol) "openai")}}selected{{end}}>openai</option>
+    <option value="anthropic" {{if and .EditMapping (eq (printf "%s" .EditMapping.Protocol) "anthropic")}}selected{{end}}>anthropic</option>
   </select>
-  <input name="alias" placeholder="Alias" required>
-  <input name="upstream_model" placeholder="Upstream model" required>
-  <label><input type="checkbox" name="enabled" checked> Enabled</label>
-  <button type="submit">Save Mapping</button>
+  <input name="alias" placeholder="Alias" value="{{if .EditMapping}}{{.EditMapping.Alias}}{{end}}" required>
+  <input name="upstream_model" placeholder="Upstream model" value="{{if .EditMapping}}{{.EditMapping.UpstreamModel}}{{end}}" required>
+  <label><input type="checkbox" name="enabled" {{if .EditMapping}}{{if .EditMapping.Enabled}}checked{{end}}{{else}}checked{{end}}> Enabled</label>
+  <button type="submit">{{if .EditMapping}}Update Mapping{{else}}Save Mapping{{end}}</button>
+  {{if .EditMapping}}<a href="/admin/mappings">Cancel edit</a>{{end}}
 </form>
 
 <table>
   <thead>
     <tr>
+      <th>Station</th>
       <th>Station ID</th>
       <th>Protocol</th>
       <th>Alias</th>
       <th>Upstream Model</th>
       <th>Enabled</th>
+      <th>Actions</th>
     </tr>
   </thead>
   <tbody>
     {{range .Mappings}}
     <tr>
+      <td>{{with index $.StationNameByID .StationID}}{{.}}{{else}}Unknown station{{end}}</td>
       <td>{{.StationID}}</td>
       <td>{{.Protocol}}</td>
       <td>{{.Alias}}</td>
       <td>{{.UpstreamModel}}</td>
       <td>{{.Enabled}}</td>
+      <td><a href="/admin/mappings/edit?id={{.ID}}">Edit</a></td>
     </tr>
     {{else}}
     <tr>
-      <td colspan="5">No mappings configured yet.</td>
+      <td colspan="7">No mappings configured yet.</td>
     </tr>
     {{end}}
   </tbody>

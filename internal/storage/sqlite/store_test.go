@@ -116,6 +116,82 @@ func TestStorePersistsStationsAndMappings(t *testing.T) {
 	}
 }
 
+func TestStoreCanGetAndUpdateModelMappingByID(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	stationID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "station-a",
+		Enabled:                      true,
+		Priority:                     10,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                "https://a.example.com/openai",
+		OpenAIAPIKey:                 "OPENAI_A",
+		AnthropicBaseURL:             "https://a.example.com/anthropic",
+		AnthropicAPIKey:              "ANTHROPIC_A",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation error = %v", err)
+	}
+
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{
+		StationID:     stationID,
+		Protocol:      core.ProtocolAnthropic,
+		Alias:         "claude-sonnet",
+		UpstreamModel: "claude-sonnet-4-5",
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("UpsertModelMapping error = %v", err)
+	}
+
+	mappings, err := store.ListMappings(ctx)
+	if err != nil {
+		t.Fatalf("ListMappings error = %v", err)
+	}
+	if len(mappings) != 1 {
+		t.Fatalf("len(mappings) = %d, want 1", len(mappings))
+	}
+
+	got, err := store.GetMapping(ctx, mappings[0].ID)
+	if err != nil {
+		t.Fatalf("GetMapping error = %v", err)
+	}
+	if got.Alias != "claude-sonnet" {
+		t.Fatalf("Alias = %q, want %q", got.Alias, "claude-sonnet")
+	}
+
+	got.Alias = "claude-opus"
+	got.UpstreamModel = "claude-opus-4.6"
+	got.Enabled = false
+	if err := store.UpdateModelMapping(ctx, got); err != nil {
+		t.Fatalf("UpdateModelMapping error = %v", err)
+	}
+
+	updated, err := store.GetMapping(ctx, got.ID)
+	if err != nil {
+		t.Fatalf("GetMapping after update error = %v", err)
+	}
+	if updated.Alias != "claude-opus" {
+		t.Fatalf("Alias after update = %q, want %q", updated.Alias, "claude-opus")
+	}
+	if updated.UpstreamModel != "claude-opus-4.6" {
+		t.Fatalf("UpstreamModel = %q, want %q", updated.UpstreamModel, "claude-opus-4.6")
+	}
+	if updated.Enabled {
+		t.Fatalf("Enabled = %v, want false", updated.Enabled)
+	}
+}
+
 func TestUpsertModelMappingRejectsUnknownStationID(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "gateway.db")

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"errors"
 	"html/template"
@@ -25,6 +26,8 @@ type store interface {
 	ListStations(ctx context.Context) ([]core.Station, error)
 	ListMappings(ctx context.Context) ([]core.ModelMapping, error)
 	UpsertModelMapping(ctx context.Context, mapping core.ModelMapping) error
+	GetMapping(ctx context.Context, mappingID int64) (core.ModelMapping, error)
+	UpdateModelMapping(ctx context.Context, mapping core.ModelMapping) error
 	ListStationStatuses(ctx context.Context) (map[int64]core.StationStatus, error)
 	ListRequestLogs(ctx context.Context, limit int) ([]core.RequestLog, error)
 	ListFailoverEvents(ctx context.Context, limit int) ([]core.FailoverEvent, error)
@@ -83,6 +86,8 @@ func NewHandlerWithOptions(store store, options Options) (http.Handler, error) {
 	mux.HandleFunc("/admin/stations/edit", handler.handleStationEdit)
 	mux.HandleFunc("/admin/stations/update", handler.handleStationUpdate)
 	mux.HandleFunc("/admin/mappings", handler.handleMappings)
+	mux.HandleFunc("/admin/mappings/edit", handler.handleMappingEdit)
+	mux.HandleFunc("/admin/mappings/update", handler.handleMappingUpdate)
 	mux.HandleFunc("/admin/status", handler.handleStatus)
 	mux.HandleFunc("/admin/logs", handler.handleLogs)
 	mux.Handle("/admin/assets/", handler.staticRoot)
@@ -407,25 +412,9 @@ func (h *Handler) handleMappings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		protocol, err := parseRequiredText(r.Form.Get("protocol"))
+		mapping, err := parseMappingForm(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		alias, err := parseRequiredText(r.Form.Get("alias"))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		upstreamModel, err := parseRequiredText(r.Form.Get("upstream_model"))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		stationID, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("station_id")), 10, 64)
-		if err != nil || stationID <= 0 {
-			http.Error(w, "invalid station_id", http.StatusBadRequest)
 			return
 		}
 		stations, err := h.store.ListStations(r.Context())
@@ -433,19 +422,12 @@ func (h *Handler) handleMappings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if !stationExists(stations, stationID) {
+		if !stationExists(stations, mapping.StationID) {
 			http.Error(w, "invalid station_id", http.StatusBadRequest)
 			return
 		}
 
-		err = h.store.UpsertModelMapping(r.Context(), core.ModelMapping{
-			StationID:     stationID,
-			Protocol:      core.Protocol(protocol),
-			Alias:         alias,
-			UpstreamModel: upstreamModel,
-			Enabled:       r.Form.Get("enabled") == "on",
-		})
-		if err != nil {
+		if err := h.store.UpsertModelMapping(r.Context(), mapping); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -453,26 +435,84 @@ func (h *Handler) handleMappings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.renderMappingsPage(w, r, nil); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (h *Handler) handleMappingEdit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	mappingID, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("id")), 10, 64)
+	if err != nil || mappingID <= 0 {
+		http.Error(w, "invalid mapping id", http.StatusBadRequest)
+		return
+	}
+
+	mapping, err := h.store.GetMapping(r.Context(), mappingID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "mapping not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := h.renderMappingsPage(w, r, &mapping); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (h *Handler) handleMappingUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !h.isValidWriteToken(r.Form.Get("write_token")) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	mappingID, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("id")), 10, 64)
+	if err != nil || mappingID <= 0 {
+		http.Error(w, "invalid mapping id", http.StatusBadRequest)
+		return
+	}
+
+	mapping, err := parseMappingForm(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	mapping.ID = mappingID
+
 	stations, err := h.store.ListStations(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	mappings, err := h.store.ListMappings(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if !stationExists(stations, mapping.StationID) {
+		http.Error(w, "invalid station_id", http.StatusBadRequest)
 		return
 	}
 
-	data := MappingsPage{
-		Title:      "Mappings",
-		WriteToken: h.writeToken,
-		Stations:   stations,
-		Mappings:   mappings,
+	if err := h.store.UpdateModelMapping(r.Context(), mapping); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "mapping not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
-	if err := h.renderPage(w, "templates/mappings.gohtml", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	http.Redirect(w, r, "/admin/mappings", http.StatusSeeOther)
 }
 
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -588,6 +628,59 @@ func parseStationForm(r *http.Request) (core.Station, error) {
 		AnthropicBaseURL:             anthropicBaseURL,
 		AnthropicAPIKey:              anthropicAPIKey,
 	}, nil
+}
+
+func parseMappingForm(r *http.Request) (core.ModelMapping, error) {
+	protocol, err := parseRequiredText(r.Form.Get("protocol"))
+	if err != nil {
+		return core.ModelMapping{}, err
+	}
+	alias, err := parseRequiredText(r.Form.Get("alias"))
+	if err != nil {
+		return core.ModelMapping{}, err
+	}
+	upstreamModel, err := parseRequiredText(r.Form.Get("upstream_model"))
+	if err != nil {
+		return core.ModelMapping{}, err
+	}
+	stationID, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("station_id")), 10, 64)
+	if err != nil || stationID <= 0 {
+		return core.ModelMapping{}, errors.New("invalid station_id")
+	}
+
+	return core.ModelMapping{
+		StationID:     stationID,
+		Protocol:      core.Protocol(protocol),
+		Alias:         alias,
+		UpstreamModel: upstreamModel,
+		Enabled:       r.Form.Get("enabled") == "on",
+	}, nil
+}
+
+func (h *Handler) renderMappingsPage(w http.ResponseWriter, r *http.Request, editMapping *core.ModelMapping) error {
+	stations, err := h.store.ListStations(r.Context())
+	if err != nil {
+		return err
+	}
+	mappings, err := h.store.ListMappings(r.Context())
+	if err != nil {
+		return err
+	}
+
+	stationNameByID := make(map[int64]string, len(stations))
+	for _, station := range stations {
+		stationNameByID[station.ID] = station.Name
+	}
+
+	data := MappingsPage{
+		Title:           "Mappings",
+		WriteToken:      h.writeToken,
+		Stations:        stations,
+		StationNameByID: stationNameByID,
+		Mappings:        mappings,
+		EditMapping:     editMapping,
+	}
+	return h.renderPage(w, "templates/mappings.gohtml", data)
 }
 
 func validateStationProtocols(openAIBaseURL string, openAIAPIKey string, anthropicBaseURL string, anthropicAPIKey string) error {

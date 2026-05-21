@@ -24,6 +24,8 @@ type store interface {
 	ListStations(ctx context.Context) ([]core.Station, error)
 	ListMappings(ctx context.Context) ([]core.ModelMapping, error)
 	UpsertModelMapping(ctx context.Context, mapping core.ModelMapping) error
+	GetMapping(ctx context.Context, mappingID int64) (core.ModelMapping, error)
+	UpdateModelMapping(ctx context.Context, mapping core.ModelMapping) error
 	FindMappings(ctx context.Context, protocol core.Protocol, alias string) ([]core.ModelMapping, error)
 	ListStationStatuses(ctx context.Context) (map[int64]core.StationStatus, error)
 	SaveStationStatus(ctx context.Context, status core.StationStatus) error

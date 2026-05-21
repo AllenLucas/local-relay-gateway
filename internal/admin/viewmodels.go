@@ -19,10 +19,12 @@ type StationsPage struct {
 }
 
 type MappingsPage struct {
-	Title      string
-	WriteToken string
-	Stations   []core.Station
-	Mappings   []core.ModelMapping
+	Title           string
+	WriteToken      string
+	Stations        []core.Station
+	StationNameByID map[int64]string
+	Mappings        []core.ModelMapping
+	EditMapping     *core.ModelMapping
 }
 
 type StatusPage struct {

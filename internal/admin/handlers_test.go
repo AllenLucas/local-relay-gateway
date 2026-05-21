@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -81,6 +82,12 @@ func TestStationsPageRendersSavedStations(t *testing.T) {
 	}
 	if !strings.Contains(mappingRecorder.Body.String(), "gpt-5") {
 		t.Fatalf("mapping page did not contain alias: %s", mappingRecorder.Body.String())
+	}
+	if !strings.Contains(mappingRecorder.Body.String(), "station-a") {
+		t.Fatalf("mapping page did not contain station name: %s", mappingRecorder.Body.String())
+	}
+	if !strings.Contains(mappingRecorder.Body.String(), "/admin/mappings/edit?id=") {
+		t.Fatalf("mapping page did not contain edit link: %s", mappingRecorder.Body.String())
 	}
 }
 
@@ -517,6 +524,108 @@ func TestMappingCreatePostRedirectsBackToPage(t *testing.T) {
 	}
 	if mappings[0].StationID != stationID {
 		t.Fatalf("station id = %d, want %d", mappings[0].StationID, stationID)
+	}
+}
+
+func TestMappingEditPageAndUpdatePostModifySavedMapping(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	firstStationID, err := createAdminTestStation(store, "station-a")
+	if err != nil {
+		t.Fatalf("CreateStation first error = %v", err)
+	}
+	secondStationID, err := createAdminTestStation(store, "station-b")
+	if err != nil {
+		t.Fatalf("CreateStation second error = %v", err)
+	}
+	if err := store.UpsertModelMapping(context.Background(), core.ModelMapping{
+		StationID:     firstStationID,
+		Protocol:      core.ProtocolOpenAI,
+		Alias:         "gpt-5",
+		UpstreamModel: "gpt-5.1",
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("UpsertModelMapping error = %v", err)
+	}
+
+	mappings, err := store.ListMappings(context.Background())
+	if err != nil {
+		t.Fatalf("ListMappings error = %v", err)
+	}
+	if len(mappings) != 1 {
+		t.Fatalf("len(mappings) = %d, want 1", len(mappings))
+	}
+	mappingID := mappings[0].ID
+
+	handler, err := admin.NewHandler(store, adminWriteToken)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	editReq := httptest.NewRequest(http.MethodGet, "/admin/mappings/edit?id="+strconv.FormatInt(mappingID, 10), nil)
+	editRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(editRecorder, editReq)
+	if editRecorder.Code != http.StatusOK {
+		t.Fatalf("edit status = %d, want %d", editRecorder.Code, http.StatusOK)
+	}
+	if !strings.Contains(editRecorder.Body.String(), "Update Mapping") {
+		t.Fatalf("edit page did not render update mode: %s", editRecorder.Body.String())
+	}
+	if !strings.Contains(editRecorder.Body.String(), "station-a (ID "+strconv.FormatInt(firstStationID, 10)+")") {
+		t.Fatalf("edit page did not show selected station label: %s", editRecorder.Body.String())
+	}
+
+	form := url.Values{
+		"write_token":    []string{adminWriteToken},
+		"id":             []string{strconv.FormatInt(mappingID, 10)},
+		"station_id":     []string{strconv.FormatInt(secondStationID, 10)},
+		"protocol":       []string{"anthropic"},
+		"alias":          []string{"claude-sonnet"},
+		"upstream_model": []string{"claude-sonnet-4.6"},
+		"enabled":        []string{"on"},
+	}
+	updateReq := httptest.NewRequest(http.MethodPost, "/admin/mappings/update", strings.NewReader(form.Encode()))
+	updateReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	updateRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(updateRecorder, updateReq)
+
+	if updateRecorder.Code != http.StatusSeeOther {
+		t.Fatalf("update status = %d, want %d", updateRecorder.Code, http.StatusSeeOther)
+	}
+	if got := updateRecorder.Header().Get("Location"); got != "/admin/mappings" {
+		t.Fatalf("update redirect location = %q, want %q", got, "/admin/mappings")
+	}
+
+	updatedMappings, err := store.ListMappings(context.Background())
+	if err != nil {
+		t.Fatalf("ListMappings after update error = %v", err)
+	}
+	if len(updatedMappings) != 1 {
+		t.Fatalf("len(updatedMappings) = %d, want 1", len(updatedMappings))
+	}
+	updated := updatedMappings[0]
+	if updated.ID != mappingID {
+		t.Fatalf("ID = %d, want %d", updated.ID, mappingID)
+	}
+	if updated.StationID != secondStationID {
+		t.Fatalf("StationID = %d, want %d", updated.StationID, secondStationID)
+	}
+	if updated.Protocol != core.ProtocolAnthropic {
+		t.Fatalf("Protocol = %q, want %q", updated.Protocol, core.ProtocolAnthropic)
+	}
+	if updated.Alias != "claude-sonnet" {
+		t.Fatalf("Alias = %q, want %q", updated.Alias, "claude-sonnet")
+	}
+	if updated.UpstreamModel != "claude-sonnet-4.6" {
+		t.Fatalf("UpstreamModel = %q, want %q", updated.UpstreamModel, "claude-sonnet-4.6")
+	}
+	if !updated.Enabled {
+		t.Fatalf("Enabled = %v, want true", updated.Enabled)
 	}
 }
 
