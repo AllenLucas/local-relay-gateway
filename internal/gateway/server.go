@@ -36,35 +36,67 @@ type store interface {
 }
 
 type Server struct {
-	cfg      config.Runtime
-	store    store
-	selector *routing.Selector
-	client   *http.Client
+	cfg       config.Runtime
+	setupMode bool
+	store     store
+	selector  *routing.Selector
+	client    *http.Client
 }
 
 type requestBuilder func(target core.ResolvedTarget, normalized core.NormalizedRequest) (*http.Request, error)
 
-func NewServer(cfg config.Runtime, store store, selector *routing.Selector) http.Handler {
+type Options struct {
+	Runtime         config.Runtime
+	AdminWriteToken string
+	SetupMode       bool
+	RuntimeFilePath string
+	RuntimeWarning  string
+}
+
+func NewServer(input any, store store, selector *routing.Selector) http.Handler {
+	options := normalizeOptions(input)
 	server := &Server{
-		cfg:      cfg,
-		store:    store,
-		selector: selector,
+		cfg:       options.Runtime,
+		setupMode: options.SetupMode,
+		store:     store,
+		selector:  selector,
 		client: &http.Client{
 			Transport: cloneDefaultTransport(),
 		},
+	}
+	adminWriteToken := options.AdminWriteToken
+	if adminWriteToken == "" {
+		adminWriteToken = deriveAdminWriteToken(options.Runtime.LocalAPIKey)
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/openai/v1/responses", server.handleResponses)
 	mux.HandleFunc("/openai/v1/chat/completions", server.handleChatCompletions)
 	mux.HandleFunc("/anthropic/v1/messages", server.handleAnthropicMessages)
-	adminHandler, err := admin.NewHandler(store, deriveAdminWriteToken(cfg.LocalAPIKey))
+	adminHandler, err := admin.NewHandlerWithOptions(store, admin.Options{
+		WriteToken:      adminWriteToken,
+		ListenAddr:      options.Runtime.ListenAddr,
+		RuntimeFilePath: options.RuntimeFilePath,
+		RuntimeWarning:  options.RuntimeWarning,
+		SetupMode:       options.SetupMode,
+	})
 	if err != nil {
 		panic(err)
 	}
 	mux.Handle("/admin", adminHandler)
 	mux.Handle("/admin/", adminHandler)
 	return mux
+}
+
+func normalizeOptions(input any) Options {
+	switch value := input.(type) {
+	case Options:
+		return value
+	case config.Runtime:
+		return Options{Runtime: value}
+	default:
+		panic("gateway.NewServer requires gateway.Options or config.Runtime")
+	}
 }
 
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +118,11 @@ func (s *Server) handleNormalizedRequest(
 	normalize func(*http.Request) (core.NormalizedRequest, error),
 	build requestBuilder,
 ) {
+	if s.setupMode {
+		http.Error(w, "setup required: open /admin/setup to configure runtime before using relay endpoints", http.StatusServiceUnavailable)
+		return
+	}
+
 	if !s.authorize(r, protocol) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return

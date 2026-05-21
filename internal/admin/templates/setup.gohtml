@@ -1,0 +1,16 @@
+{{define "content"}}
+<h1>Setup</h1>
+{{if .RuntimeWarning}}
+<p style="padding: 12px; background: #fff4d6; border: 1px solid #e7c76d;">{{.RuntimeWarning}}</p>
+{{end}}
+<p>Create the local runtime file before relay traffic is allowed. The gateway must be restarted after setup is saved.</p>
+<form method="post" action="/admin/setup" style="margin: 16px 0 24px 0; display: grid; gap: 8px; max-width: 720px;">
+  <input type="hidden" name="write_token" value="{{.WriteToken}}">
+  <label>
+    Local API key
+    <input name="local_api_key" type="password" required autocomplete="new-password">
+  </label>
+  <p style="margin: 0; color: #51606f;">Runtime file: <code>{{.RuntimeFilePath}}</code></p>
+  <button type="submit">Save Setup</button>
+</form>
+{{end}}

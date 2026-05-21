@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"relay-gateway/internal/config"
 	"relay-gateway/internal/core"
 )
 
@@ -31,26 +32,52 @@ type store interface {
 }
 
 type Handler struct {
-	store      store
-	writeToken string
-	staticRoot http.Handler
+	store           store
+	writeToken      string
+	listenAddr      string
+	runtimeFilePath string
+	runtimeWarning  string
+	setupMode       bool
+	staticRoot      http.Handler
+}
+
+type Options struct {
+	WriteToken      string
+	ListenAddr      string
+	RuntimeFilePath string
+	RuntimeWarning  string
+	SetupMode       bool
 }
 
 func NewHandler(store store, writeToken string) (http.Handler, error) {
+	return NewHandlerWithOptions(store, Options{WriteToken: writeToken})
+}
+
+func NewHandlerWithOptions(store store, options Options) (http.Handler, error) {
 	staticFS, err := fs.Sub(assets, "assets")
 	if err != nil {
 		return nil, err
 	}
+	listenAddr := strings.TrimSpace(options.ListenAddr)
+	if listenAddr == "" {
+		listenAddr = config.DefaultListenAddr
+	}
 
 	handler := &Handler{
-		store:      store,
-		writeToken: writeToken,
-		staticRoot: http.StripPrefix("/admin/assets/", http.FileServer(http.FS(staticFS))),
+		store:           store,
+		writeToken:      options.WriteToken,
+		listenAddr:      listenAddr,
+		runtimeFilePath: strings.TrimSpace(options.RuntimeFilePath),
+		runtimeWarning:  strings.TrimSpace(options.RuntimeWarning),
+		setupMode:       options.SetupMode,
+		staticRoot:      http.StripPrefix("/admin/assets/", http.FileServer(http.FS(staticFS))),
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/admin", handler.handleRoot)
 	mux.HandleFunc("/admin/", handler.handleRoot)
+	mux.HandleFunc("/admin/setup", handler.handleSetup)
+	mux.HandleFunc("/admin/runtime", handler.handleRuntime)
 	mux.HandleFunc("/admin/stations", handler.handleStations)
 	mux.HandleFunc("/admin/stations/edit", handler.handleStationEdit)
 	mux.HandleFunc("/admin/stations/update", handler.handleStationUpdate)
@@ -71,6 +98,108 @@ func (h *Handler) renderPage(w http.ResponseWriter, page string, data any) error
 		return err
 	}
 	return templates.ExecuteTemplate(w, "layout", data)
+}
+
+func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		if h.hasValidRuntimeFile() {
+			http.Redirect(w, r, "/admin/runtime", http.StatusSeeOther)
+			return
+		}
+		data := SetupPage{
+			Title:           "Setup",
+			WriteToken:      h.writeToken,
+			RuntimeFilePath: h.runtimeFilePath,
+			RuntimeWarning:  h.runtimeWarning,
+		}
+		if err := h.renderPage(w, "templates/setup.gohtml", data); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	case http.MethodPost:
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if !h.isValidWriteToken(r.Form.Get("write_token")) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		localAPIKey, err := parseRequiredText(r.Form.Get("local_api_key"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if h.runtimeFilePath == "" {
+			http.Error(w, "runtime file path is not configured", http.StatusInternalServerError)
+			return
+		}
+		if err := config.SaveRuntimeFile(h.runtimeFilePath, config.RuntimeFile{LocalAPIKey: localAPIKey}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, "/admin/stations", http.StatusSeeOther)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Handler) handleRuntime(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		localAPIKey := ""
+		if h.runtimeFilePath != "" {
+			if runtimeFile, err := config.LoadRuntimeFile(h.runtimeFilePath); err == nil {
+				localAPIKey = runtimeFile.LocalAPIKey
+			}
+		}
+		data := RuntimePage{
+			Title:           "Runtime",
+			WriteToken:      h.writeToken,
+			ListenAddr:      h.listenAddr,
+			OpenAIBaseURL:   "http://" + h.listenAddr + "/openai/v1",
+			AnthropicURL:    "http://" + h.listenAddr + "/anthropic",
+			LocalAPIKey:     localAPIKey,
+			RuntimeFilePath: h.runtimeFilePath,
+			Saved:           r.URL.Query().Get("saved") == "1",
+		}
+		if err := h.renderPage(w, "templates/runtime.gohtml", data); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	case http.MethodPost:
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if !h.isValidWriteToken(r.Form.Get("write_token")) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		localAPIKey, err := parseRequiredText(r.Form.Get("local_api_key"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if h.runtimeFilePath == "" {
+			http.Error(w, "runtime file path is not configured", http.StatusInternalServerError)
+			return
+		}
+		if err := config.SaveRuntimeFile(h.runtimeFilePath, config.RuntimeFile{LocalAPIKey: localAPIKey}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, "/admin/runtime?saved=1", http.StatusSeeOther)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Handler) hasValidRuntimeFile() bool {
+	if h.runtimeFilePath == "" {
+		return false
+	}
+	runtimeFile, err := config.LoadRuntimeFile(h.runtimeFilePath)
+	return err == nil && strings.TrimSpace(runtimeFile.LocalAPIKey) != ""
 }
 
 func (h *Handler) handleStations(w http.ResponseWriter, r *http.Request) {

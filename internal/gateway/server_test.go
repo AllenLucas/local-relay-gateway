@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -130,6 +131,23 @@ func TestResponsesHandlerRejectsUnauthorizedRequest(t *testing.T) {
 	}
 }
 
+func TestResponsesHandlerReturnsSetupGuidanceBeforeAuthInSetupMode(t *testing.T) {
+	handler := newGatewayTestServerWithOptions(t, gateway.Options{
+		Runtime:         config.Runtime{LocalAPIKey: "local-test-key", ListenAddr: "127.0.0.1:8787"},
+		SetupMode:       true,
+		RuntimeFilePath: "runtime.json",
+	}, nil)
+
+	recorder := performResponsesRequest(handler, "wrong-key", []byte(`{"model":"gpt-5","input":"hello","stream":false}`))
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(recorder.Body.String(), "/admin/setup") {
+		t.Fatalf("body did not contain setup guidance: %s", recorder.Body.String())
+	}
+}
+
 func TestAnthropicHandlerAcceptsBearerAuthorization(t *testing.T) {
 	upstreamCalls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +194,7 @@ func TestAnthropicHandlerAcceptsBearerAuthorization(t *testing.T) {
 		t.Fatalf("UpsertModelMapping error = %v", err)
 	}
 
-	handler := gateway.NewServer(config.Runtime{LocalAPIKey: "local-test-key"}, store, routing.NewSelector(nil))
+	handler := gateway.NewServer(gateway.Options{Runtime: config.Runtime{LocalAPIKey: "local-test-key"}}, store, routing.NewSelector(nil))
 
 	req := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", bytes.NewReader([]byte(`{"model":"claude-sonnet","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`)))
 	req.Header.Set("Authorization", "Bearer local-test-key")
@@ -304,7 +322,7 @@ func TestResponsesHandlerDoesNotPersistFailureOnCanceledClient(t *testing.T) {
 		t.Fatalf("UpsertModelMapping error = %v", err)
 	}
 
-	handler := gateway.NewServer(config.Runtime{LocalAPIKey: "local-test-key"}, store, routing.NewSelector(nil))
+	handler := gateway.NewServer(gateway.Options{Runtime: config.Runtime{LocalAPIKey: "local-test-key"}}, store, routing.NewSelector(nil))
 
 	reqCtx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -513,7 +531,7 @@ func TestResponsesHandlerPersistsCooldownAndLogsFailoverUsage(t *testing.T) {
 		t.Fatalf("UpsertModelMapping second error = %v", err)
 	}
 
-	handler := gateway.NewServer(config.Runtime{LocalAPIKey: "local-test-key"}, store, routing.NewSelector(func() time.Time {
+	handler := gateway.NewServer(gateway.Options{Runtime: config.Runtime{LocalAPIKey: "local-test-key"}}, store, routing.NewSelector(func() time.Time {
 		return time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
 	}))
 
@@ -582,6 +600,14 @@ type gatewayStationFixture struct {
 func newGatewayTestServer(t *testing.T, fixtures []gatewayStationFixture) http.Handler {
 	t.Helper()
 
+	return newGatewayTestServerWithOptions(t, gateway.Options{
+		Runtime: config.Runtime{LocalAPIKey: "local-test-key"},
+	}, fixtures)
+}
+
+func newGatewayTestServerWithOptions(t *testing.T, options gateway.Options, fixtures []gatewayStationFixture) http.Handler {
+	t.Helper()
+
 	dbPath := filepath.Join(t.TempDir(), "gateway.db")
 	store, err := sqlitestore.NewStore(dbPath)
 	if err != nil {
@@ -607,7 +633,7 @@ func newGatewayTestServer(t *testing.T, fixtures []gatewayStationFixture) http.H
 		}
 	}
 
-	return gateway.NewServer(config.Runtime{LocalAPIKey: "local-test-key"}, store, routing.NewSelector(nil))
+	return gateway.NewServer(options, store, routing.NewSelector(nil))
 }
 
 func performResponsesRequest(handler http.Handler, apiKey string, body []byte) *httptest.ResponseRecorder {

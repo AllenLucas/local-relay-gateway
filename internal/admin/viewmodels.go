@@ -3,9 +3,9 @@ package admin
 import "relay-gateway/internal/core"
 
 type StationsPage struct {
-	Title      string
-	WriteToken string
-	Stations   []core.Station
+	Title       string
+	WriteToken  string
+	Stations    []core.Station
 	EditStation *core.Station
 
 	ShowOnboarding          bool
@@ -37,4 +37,22 @@ type LogsPage struct {
 	FailoverEvents []core.FailoverEvent
 	UsageByStation []core.UsageRow
 	UsageByAlias   []core.UsageRow
+}
+
+type SetupPage struct {
+	Title           string
+	WriteToken      string
+	RuntimeFilePath string
+	RuntimeWarning  string
+}
+
+type RuntimePage struct {
+	Title           string
+	WriteToken      string
+	ListenAddr      string
+	OpenAIBaseURL   string
+	AnthropicURL    string
+	LocalAPIKey     string
+	RuntimeFilePath string
+	Saved           bool
 }

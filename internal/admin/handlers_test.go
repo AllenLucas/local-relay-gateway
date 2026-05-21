@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"relay-gateway/internal/admin"
+	"relay-gateway/internal/config"
 	"relay-gateway/internal/core"
 	sqlitestore "relay-gateway/internal/storage/sqlite"
 )
@@ -80,6 +81,146 @@ func TestStationsPageRendersSavedStations(t *testing.T) {
 	}
 	if !strings.Contains(mappingRecorder.Body.String(), "gpt-5") {
 		t.Fatalf("mapping page did not contain alias: %s", mappingRecorder.Body.String())
+	}
+}
+
+func TestSetupPostSavesRuntimeFileAndRedirectsToStations(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	runtimePath := filepath.Join(t.TempDir(), "runtime.json")
+	handler, err := admin.NewHandlerWithOptions(store, admin.Options{
+		WriteToken:      adminWriteToken,
+		ListenAddr:      "127.0.0.1:8787",
+		RuntimeFilePath: runtimePath,
+		RuntimeWarning:  "runtime warning",
+		SetupMode:       true,
+	})
+	if err != nil {
+		t.Fatalf("NewHandlerWithOptions error = %v", err)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/setup", nil)
+	getRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(getRecorder, getReq)
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("setup get status = %d, want %d", getRecorder.Code, http.StatusOK)
+	}
+	if !strings.Contains(getRecorder.Body.String(), "runtime warning") {
+		t.Fatalf("setup page did not contain warning: %s", getRecorder.Body.String())
+	}
+
+	form := url.Values{
+		"write_token":   []string{adminWriteToken},
+		"local_api_key": []string{"local-runtime-key"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/admin/setup", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	if got := recorder.Header().Get("Location"); got != "/admin/stations" {
+		t.Fatalf("redirect location = %q, want %q", got, "/admin/stations")
+	}
+
+	saved, err := config.LoadRuntimeFile(runtimePath)
+	if err != nil {
+		t.Fatalf("LoadRuntimeFile error = %v", err)
+	}
+	if saved.LocalAPIKey != "local-runtime-key" {
+		t.Fatalf("saved LocalAPIKey = %q, want %q", saved.LocalAPIKey, "local-runtime-key")
+	}
+
+	redirectReq := httptest.NewRequest(http.MethodGet, "/admin/setup", nil)
+	redirectRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(redirectRecorder, redirectReq)
+	if redirectRecorder.Code != http.StatusSeeOther {
+		t.Fatalf("valid runtime setup get status = %d, want %d", redirectRecorder.Code, http.StatusSeeOther)
+	}
+	if got := redirectRecorder.Header().Get("Location"); got != "/admin/runtime" {
+		t.Fatalf("valid runtime redirect location = %q, want %q", got, "/admin/runtime")
+	}
+}
+
+func TestRuntimePageShowsEndpointsAndSavedRestartNotice(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	runtimePath := filepath.Join(t.TempDir(), "runtime.json")
+	if err := config.SaveRuntimeFile(runtimePath, config.RuntimeFile{LocalAPIKey: "old-key"}); err != nil {
+		t.Fatalf("SaveRuntimeFile initial error = %v", err)
+	}
+
+	handler, err := admin.NewHandlerWithOptions(store, admin.Options{
+		WriteToken:      adminWriteToken,
+		ListenAddr:      "127.0.0.1:8787",
+		RuntimeFilePath: runtimePath,
+	})
+	if err != nil {
+		t.Fatalf("NewHandlerWithOptions error = %v", err)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/runtime", nil)
+	getRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(getRecorder, getReq)
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("runtime get status = %d, want %d", getRecorder.Code, http.StatusOK)
+	}
+	body := getRecorder.Body.String()
+	for _, want := range []string{
+		"http://127.0.0.1:8787/openai/v1",
+		"http://127.0.0.1:8787/anthropic",
+		`value="old-key"`,
+		runtimePath,
+		"Restart required",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("runtime page did not contain %q: %s", want, body)
+		}
+	}
+
+	form := url.Values{
+		"write_token":   []string{adminWriteToken},
+		"local_api_key": []string{"new-key"},
+	}
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/runtime", strings.NewReader(form.Encode()))
+	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(postRecorder, postReq)
+	if postRecorder.Code != http.StatusSeeOther {
+		t.Fatalf("runtime post status = %d, want %d", postRecorder.Code, http.StatusSeeOther)
+	}
+	if got := postRecorder.Header().Get("Location"); got != "/admin/runtime?saved=1" {
+		t.Fatalf("runtime post redirect = %q, want %q", got, "/admin/runtime?saved=1")
+	}
+
+	saved, err := config.LoadRuntimeFile(runtimePath)
+	if err != nil {
+		t.Fatalf("LoadRuntimeFile error = %v", err)
+	}
+	if saved.LocalAPIKey != "new-key" {
+		t.Fatalf("saved LocalAPIKey = %q, want %q", saved.LocalAPIKey, "new-key")
+	}
+
+	savedReq := httptest.NewRequest(http.MethodGet, "/admin/runtime?saved=1", nil)
+	savedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(savedRecorder, savedReq)
+	if savedRecorder.Code != http.StatusOK {
+		t.Fatalf("runtime saved get status = %d, want %d", savedRecorder.Code, http.StatusOK)
+	}
+	if !strings.Contains(savedRecorder.Body.String(), "Saved. Restart required") {
+		t.Fatalf("runtime saved page did not contain restart notice: %s", savedRecorder.Body.String())
 	}
 }
 
