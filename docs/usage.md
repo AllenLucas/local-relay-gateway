@@ -9,6 +9,7 @@ This guide is for day-to-day operators of the local gateway, covering startup, s
 - 本地健康检查地址是 `http://127.0.0.1:8787/healthz`。 / The local process health endpoint is `http://127.0.0.1:8787/healthz`.
 - OpenAI 兼容入口是 `/openai/v1/responses` 和 `/openai/v1/chat/completions`。 / OpenAI-compatible entrypoints are `/openai/v1/responses` and `/openai/v1/chat/completions`.
 - Anthropic 兼容入口是 `/anthropic/v1/messages`。 / The Anthropic-compatible entrypoint is `/anthropic/v1/messages`.
+- 上游请求会透传本地客户端的 `User-Agent`；如果客户端未发送，则不会自动暴露 Go 默认 `User-Agent`。 / Upstream requests forward the local client's `User-Agent`; if the client omits it, the Go default `User-Agent` is suppressed.
 - 管理页面默认从 `/admin/stations` 开始。 / The admin UI starts at `/admin/stations`.
 - 数据持久化使用本地 SQLite 文件。 / Persistence uses a local SQLite file.
 
@@ -117,6 +118,7 @@ In the current build, `/admin` redirects to `/admin/stations`, and the other use
 
 - `/admin/mappings`
 - `/admin/runtime`
+- `/admin/sync`
 - `/admin/status`
 - `/admin/logs`
 
@@ -162,8 +164,8 @@ These values are suitable for the first primary station:
 如果要增加备用站点，把 `priority` 降低，例如 `50`，其余按该站点支持的协议做同样配置即可。  
 For a backup station, lower `priority` to something like `50` and fill the rest the same way for whichever protocol(s) that station supports.
 
-已保存的站点后续可以在 `Stations` 页面点击 `Edit` 继续修改。  
-Saved stations can be modified later by clicking `Edit` on the `Stations` page.
+已保存的站点后续可以在 `Stations` 页面点击 `Edit` 继续修改，也可以用 `Delete` 删除当前设备上的本地站点配置。删除站点会同时删除它的映射和运行状态，但不会删除历史请求日志。  
+Saved stations can be modified later by clicking `Edit` on the `Stations` page, or removed from the current device with `Delete`. Deleting a station also deletes its mappings and runtime status, but keeps historical request logs.
 
 ## 创建第一个映射 / Create The First Mappings
 
@@ -192,6 +194,54 @@ Recommended starter mappings:
 
 如果你有多个站点都要处理同一个别名，必须在每个站点下各建一条映射。  
 If multiple stations should serve the same alias, create that alias mapping under every participating station.
+
+已保存的映射可以在 `Mappings` 页面点击 `Edit` 修改，或点击 `Delete` 删除当前设备上的本地映射。  
+Saved mappings can be modified with `Edit` on the `Mappings` page, or removed from the current device with `Delete`.
+
+## WebDAV 手动同步 / Manual WebDAV Sync
+
+`/admin/sync` 提供手动上传和拉取配置快照。它不是实时同步；只有用户点击上传或拉取时才会改变 WebDAV 或本地数据库。填写的 WebDAV URL 会被当作父目录，程序会在其下固定使用 `allenlucasAIProxyTool/` 子目录。  
+`/admin/sync` provides manual upload and pull for config snapshots. It is not real-time sync; WebDAV and the local database change only when the user explicitly uploads or pulls. The entered WebDAV URL is treated as a parent directory, and the gateway always uses a fixed `allenlucasAIProxyTool/` child directory under it.
+
+上传行为：  
+Upload behavior:
+
+1. 从本地 SQLite 读取当前站点和映射。  
+   Read current stations and mappings from local SQLite.
+2. 确保 WebDAV 父目录下存在 `allenlucasAIProxyTool/` 子目录，然后生成 JSON 快照并上传到这个子目录。  
+   Ensure the `allenlucasAIProxyTool/` child directory exists under the WebDAV parent directory, then generate a JSON snapshot and upload it to that child directory.
+3. 文件名包含设备名和 UTC 时间戳，例如 `lrg-config-20260521T143045Z-work-laptop.json`。  
+   The filename includes the device name and UTC timestamp, for example `lrg-config-20260521T143045Z-work-laptop.json`.
+4. 上传后清理 `allenlucasAIProxyTool/` 子目录里的旧快照，只保留最新 5 个。  
+   After upload, old snapshots in `allenlucasAIProxyTool/` are pruned so only the latest 5 remain.
+
+拉取行为：  
+Pull behavior:
+
+1. 从 WebDAV 父目录下的 `allenlucasAIProxyTool/` 子目录选择最新的 `lrg-config-*.json`。  
+   Select the newest `lrg-config-*.json` from the `allenlucasAIProxyTool/` child directory under the WebDAV parent directory.
+2. 远端快照作为权威配置。  
+   Treat the remote snapshot as authoritative.
+3. 本地同名站点会更新，本地缺少的站点会新增，远端不存在的本地站点会删除。  
+   Local stations with the same name are updated, missing local stations are created, and local stations absent from the remote snapshot are deleted.
+4. 映射按 `station_name + protocol + alias` 对比；拉取后本地映射会与远端快照一致。  
+   Mappings are matched by `station_name + protocol + alias`; after pull, local mappings match the remote snapshot.
+
+同步快照包含：  
+The sync snapshot includes:
+
+- 站点基础配置、上游 Base URL、上游 `openai_api_key` 和 `anthropic_api_key`。 / Station settings, upstream Base URLs, and upstream `openai_api_key` / `anthropic_api_key`.
+- 模型映射关系。 / Model mappings.
+
+同步快照不包含：  
+The sync snapshot excludes:
+
+- `/admin/runtime` 的 Local API Key。 / The Local API Key from `/admin/runtime`.
+- runtime 文件路径、监听地址、数据库路径。 / Runtime file path, listen address, and database path.
+- 状态、冷却、请求日志和故障切换日志。 / Status, cooldown, request logs, and failover logs.
+
+如果某台设备删除了站点或映射但没有上传，删除只影响这台设备；如果它随后直接拉取远端快照，远端仍存在的配置会被恢复。删除只有在上传新快照、其他设备再拉取后才会传播。  
+If one device deletes a station or mapping without uploading, the deletion affects only that device; if it pulls the remote snapshot later, config that still exists remotely will be restored. Deletions propagate only after uploading a new snapshot and pulling it on other devices.
 
 ## Codex CLI 设置 / Codex CLI Setup
 
@@ -271,8 +321,9 @@ curl -X POST "http://127.0.0.1:8787/anthropic/v1/messages" \
 
 ## Admin 页面说明 / Admin Pages
 
-- `Stations`：新增站点、查看当前已保存的基础配置，并通过 `Edit` 修改已有站点。 / `Stations`: create stations, review saved base settings, and modify existing stations via `Edit`.
-- `Mappings`：按站点和协议维护别名到上游模型名的映射。 / `Mappings`: manage alias-to-upstream-model mappings by station and protocol.
+- `Stations`：新增站点、查看当前已保存的基础配置，并通过 `Edit` 修改或 `Delete` 删除已有站点。 / `Stations`: create stations, review saved base settings, and modify existing stations via `Edit` or delete them with `Delete`.
+- `Mappings`：按站点和协议维护别名到上游模型名的映射，也支持删除单条映射。 / `Mappings`: manage alias-to-upstream-model mappings by station and protocol, and delete individual mappings.
+- `Sync`：手动上传或拉取 WebDAV 配置快照。 / `Sync`: manually upload or pull WebDAV config snapshots.
 - `Status`：查看 `healthy`、`cooldown` 等状态，以及失败数、恢复数和最后错误。 / `Status`: inspect `healthy`, `cooldown`, and related counters and errors.
 - `Logs`：查看最近请求、故障切换事件、按站点统计和按别名统计。 / `Logs`: inspect recent requests, failover events, usage by station, and usage by alias.
 
