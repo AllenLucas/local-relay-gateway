@@ -1,51 +1,94 @@
 {{define "content"}}
-<h1>Mappings</h1>
-<form method="post" action="{{if .EditMapping}}/admin/mappings/update{{else}}/admin/mappings{{end}}" style="margin: 16px 0 24px 0; display: grid; gap: 8px; max-width: 640px;">
+<h1>Mappings / 模型别名映射</h1>
+
+<p class="muted">
+  本地客户端请求里的 <code>model</code> 不会直接发给上游，会先在这里按 <code>站点 + 协议 + 别名</code> 查映射。没有匹配映射的站点会被路由跳过。
+</p>
+
+{{if .EditMapping}}
+<p>当前正在编辑映射 ID <strong>{{.EditMapping.ID}}</strong> · <a href="/admin/mappings">取消编辑</a></p>
+{{end}}
+
+<form class="card" method="post" action="{{if .EditMapping}}/admin/mappings/update{{else}}/admin/mappings{{end}}">
   <input type="hidden" name="write_token" value="{{.WriteToken}}">
   {{if .EditMapping}}<input type="hidden" name="id" value="{{.EditMapping.ID}}">{{end}}
-  <select name="station_id" required>
-    <option value="">Select station</option>
-    {{range .Stations}}
-    <option value="{{.ID}}" {{if and $.EditMapping (eq .ID $.EditMapping.StationID)}}selected{{end}}>{{.Name}} (ID {{.ID}})</option>
-    {{end}}
-  </select>
-  <select name="protocol" required>
-    <option value="openai" {{if and .EditMapping (eq (printf "%s" .EditMapping.Protocol) "openai")}}selected{{end}}>openai</option>
-    <option value="anthropic" {{if and .EditMapping (eq (printf "%s" .EditMapping.Protocol) "anthropic")}}selected{{end}}>anthropic</option>
-  </select>
-  <input name="alias" placeholder="Alias" value="{{if .EditMapping}}{{.EditMapping.Alias}}{{end}}" required>
-  <input name="upstream_model" placeholder="Upstream model" value="{{if .EditMapping}}{{.EditMapping.UpstreamModel}}{{end}}" required>
-  <label><input type="checkbox" name="enabled" {{if .EditMapping}}{{if .EditMapping.Enabled}}checked{{end}}{{else}}checked{{end}}> Enabled</label>
-  <button type="submit">{{if .EditMapping}}Update Mapping{{else}}Save Mapping{{end}}</button>
-  {{if .EditMapping}}<a href="/admin/mappings">Cancel edit</a>{{end}}
+
+  <div class="grid-2">
+    <label class="field">
+      <span class="field-label">关联站点 <span class="en">Station</span></span>
+      <span class="field-hint">此映射所属的上游站点；同一别名要在多个站点生效就分别建多条映射。</span>
+      <select name="station_id" required>
+        <option value="">— 请选择站点 —</option>
+        {{range .Stations}}
+        <option value="{{.ID}}" {{if and $.EditMapping (eq .ID $.EditMapping.StationID)}}selected{{end}}>{{.Name}} (ID {{.ID}})</option>
+        {{end}}
+      </select>
+    </label>
+
+    <label class="field">
+      <span class="field-label">协议 <span class="en">Protocol</span></span>
+      <span class="field-hint"><code>openai</code> 走 <code>/openai/v1/*</code>，<code>anthropic</code> 走 <code>/anthropic/v1/messages</code>。</span>
+      <select name="protocol" required>
+        <option value="openai" {{if and .EditMapping (eq (printf "%s" .EditMapping.Protocol) "openai")}}selected{{end}}>openai</option>
+        <option value="anthropic" {{if and .EditMapping (eq (printf "%s" .EditMapping.Protocol) "anthropic")}}selected{{end}}>anthropic</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span class="field-label">本地别名 <span class="en">Alias</span></span>
+      <span class="field-hint">客户端请求 body 里 <code>model</code> 字段使用的名字，例如 <code>gpt-5</code> 或 <code>claude-sonnet</code>。</span>
+      <input name="alias" placeholder="gpt-5" value="{{if .EditMapping}}{{.EditMapping.Alias}}{{end}}" required>
+    </label>
+
+    <label class="field">
+      <span class="field-label">上游真实模型 <span class="en">Upstream model</span></span>
+      <span class="field-hint">实际发给中转站的模型名，例如 <code>gpt-5.1</code> 或 <code>claude-sonnet-4-5</code>。</span>
+      <input name="upstream_model" placeholder="gpt-5.1" value="{{if .EditMapping}}{{.EditMapping.UpstreamModel}}{{end}}" required>
+    </label>
+  </div>
+
+  <div class="field" style="margin-top: 6px;">
+    <span class="field-label">启用 <span class="en">Enabled</span></span>
+    <span class="field-hint">禁用后此别名不会再被这个站点承接，路由会跳到下一候选。</span>
+    <label class="field-check">
+      <input type="checkbox" name="enabled" {{if .EditMapping}}{{if .EditMapping.Enabled}}checked{{end}}{{else}}checked{{end}}>
+      <span>启用此映射</span>
+    </label>
+  </div>
+
+  <div class="actions">
+    <button type="submit">{{if .EditMapping}}Update Mapping{{else}}Save Mapping{{end}}</button>
+    {{if .EditMapping}}<a class="btn subtle" href="/admin/mappings">取消</a>{{end}}
+  </div>
 </form>
 
+<h2>Existing Mappings / 已配置映射</h2>
 <table>
   <thead>
     <tr>
-      <th>Station</th>
+      <th>站点</th>
       <th>Station ID</th>
-      <th>Protocol</th>
-      <th>Alias</th>
-      <th>Upstream Model</th>
-      <th>Enabled</th>
-      <th>Actions</th>
+      <th>协议</th>
+      <th>本地别名</th>
+      <th>上游模型</th>
+      <th>启用</th>
+      <th>操作</th>
     </tr>
   </thead>
   <tbody>
     {{range .Mappings}}
     <tr>
-      <td>{{with index $.StationNameByID .StationID}}{{.}}{{else}}Unknown station{{end}}</td>
-      <td>{{.StationID}}</td>
+      <td>{{with index $.StationNameByID .StationID}}{{.}}{{else}}<span class="muted">Unknown station</span>{{end}}</td>
+      <td class="muted">{{.StationID}}</td>
       <td>{{.Protocol}}</td>
       <td>{{.Alias}}</td>
       <td>{{.UpstreamModel}}</td>
-      <td>{{.Enabled}}</td>
-      <td><a href="/admin/mappings/edit?id={{.ID}}">Edit</a></td>
+      <td>{{if .Enabled}}<span class="pill ok">on</span>{{else}}<span class="pill">off</span>{{end}}</td>
+      <td><a href="/admin/mappings/edit?id={{.ID}}">编辑</a></td>
     </tr>
     {{else}}
     <tr>
-      <td colspan="7">No mappings configured yet.</td>
+      <td colspan="7" class="muted">No mappings configured yet. / 还没有映射。</td>
     </tr>
     {{end}}
   </tbody>

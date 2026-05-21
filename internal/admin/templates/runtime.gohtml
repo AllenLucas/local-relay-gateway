@@ -1,35 +1,52 @@
 {{define "content"}}
-<h1>Runtime</h1>
+<h1>Runtime / 本地运行时</h1>
+
 {{if .Saved}}
-<p style="padding: 12px; background: #fff4d6; border: 1px solid #e7c76d;">Saved. Restart required before the new local key is used by relay endpoints.</p>
+<div class="notice ok">已保存。新的本地密钥要重启进程后才会被代理入口启用。 / Saved. Restart required.</div>
 {{end}}
 {{if .RuntimeError}}
-<p style="padding: 12px; background: #ffe8e8; border: 1px solid #d88a8a;">{{.RuntimeError}}</p>
+<div class="notice err">{{.RuntimeError}}</div>
 {{end}}
-<section style="margin: 16px 0 24px 0; display: grid; gap: 12px; max-width: 820px;">
-  <p>Copy these local client endpoints. Runtime changes are written to disk, but this running process keeps using the current startup configuration until restart.</p>
-  <label>
-    OpenAI base URL
-    <input readonly data-copy-source id="openai-url" value="{{.OpenAIBaseURL}}">
-    <button type="button" data-copy-target="openai-url">Copy</button>
-  </label>
-  <label>
-    Anthropic base URL
-    <input readonly data-copy-source id="anthropic-url" value="{{.AnthropicURL}}">
-    <button type="button" data-copy-target="anthropic-url">Copy</button>
-  </label>
+
+<section class="card">
+  <h2>本地客户端入口 / Local Endpoints</h2>
+  <p class="muted">把下面两个地址配到你的 Codex CLI / Claude Code 客户端里。运行时配置写入磁盘后，当前进程仍按启动时的配置工作，直到下一次重启。</p>
+
+  <div class="field">
+    <span class="field-label">OpenAI Base URL <span class="en">for Codex CLI</span></span>
+    <span class="field-hint">把客户端的 <code>OPENAI_BASE_URL</code> 设为此值，鉴权头使用 <code>Authorization: Bearer &lt;本地密钥&gt;</code>。</span>
+    <div class="field-inline">
+      <input readonly data-copy-source id="openai-url" value="{{.OpenAIBaseURL}}">
+      <button type="button" class="subtle" data-copy-target="openai-url">复制</button>
+    </div>
+  </div>
+
+  <div class="field">
+    <span class="field-label">Anthropic Base URL <span class="en">for Claude Code</span></span>
+    <span class="field-hint">把客户端的 <code>ANTHROPIC_BASE_URL</code> 设为此值，鉴权头支持 <code>x-api-key</code> 或 <code>Authorization: Bearer</code>。</span>
+    <div class="field-inline">
+      <input readonly data-copy-source id="anthropic-url" value="{{.AnthropicURL}}">
+      <button type="button" class="subtle" data-copy-target="anthropic-url">复制</button>
+    </div>
+  </div>
 </section>
 
-<form method="post" action="/admin/runtime" style="margin: 16px 0 24px 0; display: grid; gap: 8px; max-width: 720px;">
+<form class="card" method="post" action="/admin/runtime">
+  <h2>本地网关密钥 / Local API Key</h2>
   <input type="hidden" name="write_token" value="{{.WriteToken}}">
-  <label>
-    Local API key
-    <input id="local-api-key" name="local_api_key" type="password" value="{{.LocalAPIKey}}" required autocomplete="new-password">
-    <button type="button" data-toggle-password="local-api-key">Show</button>
-    <button type="button" data-copy-target="local-api-key">Copy</button>
-  </label>
-  <p style="margin: 0; color: #51606f;">Runtime file: <code>{{.RuntimeFilePath}}</code></p>
-  <p style="margin: 0; color: #8a5a00;">Restart required after saving changes.</p>
-  <button type="submit">Save Runtime</button>
+  <div class="field">
+    <span class="field-label">本地密钥 <span class="en">Local API key</span></span>
+    <span class="field-hint">客户端访问本地代理入口时必须携带此密钥；它和上游中转站的密钥无关。修改后需要重启进程。</span>
+    <div class="field-inline">
+      <input id="local-api-key" name="local_api_key" type="password" value="{{.LocalAPIKey}}" required autocomplete="new-password">
+      <button type="button" class="subtle" data-toggle-password="local-api-key">显示</button>
+      <button type="button" class="subtle" data-copy-target="local-api-key">复制</button>
+    </div>
+  </div>
+  <p class="muted">配置文件位置 / Runtime file: <code>{{.RuntimeFilePath}}</code></p>
+  <p class="notice warn">修改后需要重启进程才会生效。 / Restart required after saving changes.</p>
+  <div class="actions">
+    <button type="submit">Save Runtime</button>
+  </div>
 </form>
 {{end}}

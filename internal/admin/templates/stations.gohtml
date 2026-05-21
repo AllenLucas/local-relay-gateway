@@ -1,76 +1,161 @@
 {{define "content"}}
-<h1>Stations</h1>
+<h1>Stations / 站点配置</h1>
+
 {{if .ShowOnboarding}}
-<section style="margin: 16px 0 24px 0; padding: 16px; background: #ffffff; border: 1px solid #d8e0eb;">
+<section class="card">
   <h2>Quick Setup / 快速配置</h2>
-  <p>Start the gateway locally, then open the admin page and add your first relay station. / 先在本地启动网关，然后打开管理页面并添加第一个中转站。</p>
+  <p>当前还没有任何站点，按下面步骤添加第一个上游中转站。</p>
+  <p class="muted">Start the gateway locally, then add your first relay station.</p>
   <ol>
     <li>
-      <strong>Step 1 / 第一步</strong><br>
-      Gateway default address: <code>http://{{.DefaultListenAddr}}</code><br>
-      网关默认地址：<code>http://{{.DefaultListenAddr}}</code>
+      <strong>第一步 / Step 1</strong><br>
+      网关默认地址 / Gateway default address: <code>http://{{.DefaultListenAddr}}</code>
     </li>
     <li>
-      <strong>Step 2 / 第二步</strong><br>
-      Fill one station with OpenAI settings, Anthropic settings, or both. / 为一个站点填写 OpenAI 配置、Anthropic 配置，或同时填写两者。<br>
-      OpenAI base URL example: <code>{{.ExampleOpenAIBaseURL}}</code><br>
-      Anthropic base URL example: <code>{{.ExampleAnthropicBaseURL}}</code>
+      <strong>第二步 / Step 2</strong><br>
+      为一个站点填写 OpenAI、Anthropic，或两者同时配置。每种协议的 Base URL 和 API Key 必须成对出现。<br>
+      <span class="muted">Fill OpenAI, Anthropic, or both. Each protocol needs base URL + key together.</span><br>
+      OpenAI base URL 示例: <code>{{.ExampleOpenAIBaseURL}}</code><br>
+      Anthropic base URL 示例: <code>{{.ExampleAnthropicBaseURL}}</code>
     </li>
     <li>
-      <strong>Step 3 / 第三步</strong><br>
-      After saving the station, create model mappings under Mappings. / 保存站点后，到 Mappings 页面建立模型映射。<br>
-      OpenAI alias example: <code>{{.ExampleOpenAIAlias}}</code> -> <code>{{.ExampleOpenAIModel}}</code><br>
-      Anthropic alias example: <code>{{.ExampleAnthropicAlias}}</code> -> <code>{{.ExampleAnthropicModel}}</code>
+      <strong>第三步 / Step 3</strong><br>
+      保存站点后，到 <a href="/admin/mappings">Mappings</a> 页面建立模型别名映射。<br>
+      OpenAI 别名示例: <code>{{.ExampleOpenAIAlias}}</code> → <code>{{.ExampleOpenAIModel}}</code><br>
+      Anthropic 别名示例: <code>{{.ExampleAnthropicAlias}}</code> → <code>{{.ExampleAnthropicModel}}</code>
     </li>
   </ol>
 </section>
 {{end}}
+
 {{if .EditStation}}
-<p>Editing station: <strong>{{.EditStation.Name}}</strong> / 正在编辑站点：<strong>{{.EditStation.Name}}</strong></p>
+<p>当前正在编辑站点 / Editing station: <strong>{{.EditStation.Name}}</strong> · <a href="/admin/stations">取消编辑</a></p>
 {{end}}
-<form method="post" action="{{if .EditStation}}/admin/stations/update{{else}}/admin/stations{{end}}" style="margin: 16px 0 24px 0; display: grid; gap: 8px; max-width: 960px;">
+
+<form class="card" method="post" action="{{if .EditStation}}/admin/stations/update{{else}}/admin/stations{{end}}">
   <input type="hidden" name="write_token" value="{{.WriteToken}}">
   {{if .EditStation}}<input type="hidden" name="id" value="{{.EditStation.ID}}">{{end}}
-  <input name="name" placeholder="Station name" value="{{if .EditStation}}{{.EditStation.Name}}{{end}}" required>
-  <label><input type="checkbox" name="enabled" {{if .EditStation}}{{if .EditStation.Enabled}}checked{{end}}{{else}}checked{{end}}> Enabled</label>
-  <input name="priority" type="number" value="{{if .EditStation}}{{.EditStation.Priority}}{{else}}10{{end}}" placeholder="Priority">
-  <input name="cooldown_seconds" type="number" value="{{if .EditStation}}{{.EditStation.CooldownSeconds}}{{else}}30{{end}}" placeholder="Cooldown seconds">
-  <input name="health_check_interval_seconds" type="number" value="{{if .EditStation}}{{.EditStation.HealthCheckIntervalSeconds}}{{else}}15{{end}}" placeholder="Health interval seconds">
-  <input name="health_check_timeout_seconds" type="number" value="{{if .EditStation}}{{.EditStation.HealthCheckTimeoutSeconds}}{{else}}5{{end}}" placeholder="Health timeout seconds">
-  <input name="consecutive_failure_threshold" type="number" value="{{if .EditStation}}{{.EditStation.ConsecutiveFailureThreshold}}{{else}}1{{end}}" placeholder="Failure threshold">
-  <input name="consecutive_recovery_threshold" type="number" value="{{if .EditStation}}{{.EditStation.ConsecutiveRecoveryThreshold}}{{else}}2{{end}}" placeholder="Recovery threshold">
-  <input name="openai_base_url" placeholder="OpenAI base URL" value="{{if .EditStation}}{{.EditStation.OpenAIBaseURL}}{{end}}">
-  <input name="openai_api_key" placeholder="OpenAI API key" value="{{if .EditStation}}{{.EditStation.OpenAIAPIKey}}{{end}}">
-  <input name="anthropic_base_url" placeholder="Anthropic base URL" value="{{if .EditStation}}{{.EditStation.AnthropicBaseURL}}{{end}}">
-  <input name="anthropic_api_key" placeholder="Anthropic API key" value="{{if .EditStation}}{{.EditStation.AnthropicAPIKey}}{{end}}">
-  <p style="margin: 0; color: #51606f;">Configure OpenAI, Anthropic, or both. For each protocol, base URL and key must be filled together. / 可只配置 OpenAI、Anthropic，或两者同时配置。每种协议都必须同时填写 base URL 和 key。</p>
-  <button type="submit">{{if .EditStation}}Update Station{{else}}Save Station{{end}}</button>
+
+  <fieldset>
+    <legend>基础 / Basics</legend>
+    <div class="grid-2">
+      <label class="field">
+        <span class="field-label">站点名称 <span class="en">Station name</span></span>
+        <span class="field-hint">本地唯一标识，例如 <code>relay-a</code>，仅自己识别用。</span>
+        <input name="name" value="{{if .EditStation}}{{.EditStation.Name}}{{end}}" required>
+      </label>
+      <div class="field">
+        <span class="field-label">启用状态 <span class="en">Enabled</span></span>
+        <span class="field-hint">禁用后该站点不会被路由选中，也不参与失败切换。</span>
+        <label class="field-check">
+          <input type="checkbox" name="enabled" {{if .EditStation}}{{if .EditStation.Enabled}}checked{{end}}{{else}}checked{{end}}>
+          <span>启用此站点</span>
+        </label>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>调度与冷却 / Scheduling</legend>
+    <div class="grid-2">
+      <label class="field">
+        <span class="field-label">优先级 <span class="en">Priority</span></span>
+        <span class="field-hint">数字越大越先尝试，主站点用较大值，备用站点用较小值。</span>
+        <input name="priority" type="number" min="1" value="{{if .EditStation}}{{.EditStation.Priority}}{{else}}10{{end}}" required>
+      </label>
+      <label class="field">
+        <span class="field-label">冷却时间（秒）<span class="en">Cooldown seconds</span></span>
+        <span class="field-hint">触发失败阈值后，该站点会被跳过这么多秒，建议 30~120。</span>
+        <input name="cooldown_seconds" type="number" min="1" value="{{if .EditStation}}{{.EditStation.CooldownSeconds}}{{else}}30{{end}}" required>
+      </label>
+      <label class="field">
+        <span class="field-label">失败阈值 <span class="en">Failure threshold</span></span>
+        <span class="field-hint">连续失败多少次后进入冷却。设为 1 表示一次失败就切换。</span>
+        <input name="consecutive_failure_threshold" type="number" min="1" value="{{if .EditStation}}{{.EditStation.ConsecutiveFailureThreshold}}{{else}}1{{end}}" required>
+      </label>
+      <label class="field">
+        <span class="field-label">恢复阈值 <span class="en">Recovery threshold</span></span>
+        <span class="field-hint">连续成功多少次后从冷却恢复为健康。</span>
+        <input name="consecutive_recovery_threshold" type="number" min="1" value="{{if .EditStation}}{{.EditStation.ConsecutiveRecoveryThreshold}}{{else}}2{{end}}" required>
+      </label>
+      <label class="field">
+        <span class="field-label">健康检查间隔（秒）<span class="en">Health interval</span></span>
+        <span class="field-hint">预留字段。当前后台健康检查固定为 15 秒，此处先随便填一个正整数。</span>
+        <input name="health_check_interval_seconds" type="number" min="1" value="{{if .EditStation}}{{.EditStation.HealthCheckIntervalSeconds}}{{else}}15{{end}}" required>
+      </label>
+      <label class="field">
+        <span class="field-label">健康检查超时（秒）<span class="en">Health timeout</span></span>
+        <span class="field-hint">预留字段。当前后台健康检查超时固定为 5 秒。</span>
+        <input name="health_check_timeout_seconds" type="number" min="1" value="{{if .EditStation}}{{.EditStation.HealthCheckTimeoutSeconds}}{{else}}5{{end}}" required>
+      </label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>OpenAI 上游 / OpenAI Upstream</legend>
+    <p class="field-hint" style="margin: 0 0 10px 0;">Base URL 和 API Key 必须成对填写；都留空表示此站点不承接 OpenAI 协议。</p>
+    <div class="grid-2">
+      <label class="field">
+        <span class="field-label">OpenAI Base URL</span>
+        <span class="field-hint">填到 <code>/openai</code> 这一级，网关会自动拼接 <code>/v1/responses</code> 或 <code>/v1/chat/completions</code>。</span>
+        <input name="openai_base_url" placeholder="https://relay-a.example.invalid/openai" value="{{if .EditStation}}{{.EditStation.OpenAIBaseURL}}{{end}}">
+      </label>
+      <label class="field">
+        <span class="field-label">OpenAI API Key</span>
+        <span class="field-hint">上游中转站发给你的真实密钥，会保存在本地 SQLite 里。</span>
+        <input name="openai_api_key" type="password" autocomplete="new-password" value="{{if .EditStation}}{{.EditStation.OpenAIAPIKey}}{{end}}">
+      </label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Anthropic 上游 / Anthropic Upstream</legend>
+    <p class="field-hint" style="margin: 0 0 10px 0;">Base URL 和 API Key 必须成对填写；都留空表示此站点不承接 Anthropic 协议。</p>
+    <div class="grid-2">
+      <label class="field">
+        <span class="field-label">Anthropic Base URL</span>
+        <span class="field-hint">填到 <code>/anthropic</code> 这一级，网关会自动拼接 <code>/v1/messages</code>。</span>
+        <input name="anthropic_base_url" placeholder="https://relay-a.example.invalid/anthropic" value="{{if .EditStation}}{{.EditStation.AnthropicBaseURL}}{{end}}">
+      </label>
+      <label class="field">
+        <span class="field-label">Anthropic API Key</span>
+        <span class="field-hint">上游中转站给你的 Anthropic 密钥。</span>
+        <input name="anthropic_api_key" type="password" autocomplete="new-password" value="{{if .EditStation}}{{.EditStation.AnthropicAPIKey}}{{end}}">
+      </label>
+    </div>
+  </fieldset>
+
+  <div class="actions">
+    <button type="submit">{{if .EditStation}}Update Station{{else}}Save Station{{end}}</button>
+    {{if .EditStation}}<a class="btn subtle" href="/admin/stations">取消</a>{{end}}
+  </div>
 </form>
 
+<h2>Existing Stations / 已配置站点</h2>
 <table>
   <thead>
     <tr>
-      <th>Name</th>
-      <th>Enabled</th>
-      <th>Priority</th>
+      <th>名称 / Name</th>
+      <th>启用</th>
+      <th>优先级</th>
       <th>OpenAI Base URL</th>
       <th>Anthropic Base URL</th>
-      <th>Actions</th>
+      <th>操作</th>
     </tr>
   </thead>
   <tbody>
     {{range .Stations}}
     <tr>
       <td>{{.Name}}</td>
-      <td>{{.Enabled}}</td>
+      <td>{{if .Enabled}}<span class="pill ok">on</span>{{else}}<span class="pill">off</span>{{end}}</td>
       <td>{{.Priority}}</td>
-      <td>{{.OpenAIBaseURL}}</td>
-      <td>{{.AnthropicBaseURL}}</td>
-      <td><a href="/admin/stations/edit?id={{.ID}}">Edit</a></td>
+      <td class="muted">{{if .OpenAIBaseURL}}{{.OpenAIBaseURL}}{{else}}—{{end}}</td>
+      <td class="muted">{{if .AnthropicBaseURL}}{{.AnthropicBaseURL}}{{else}}—{{end}}</td>
+      <td><a href="/admin/stations/edit?id={{.ID}}">编辑</a></td>
     </tr>
     {{else}}
     <tr>
-      <td colspan="6">No stations configured yet.</td>
+      <td colspan="6" class="muted">No stations configured yet. / 还没有站点。</td>
     </tr>
     {{end}}
   </tbody>

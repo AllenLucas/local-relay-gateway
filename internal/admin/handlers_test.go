@@ -66,11 +66,11 @@ func TestStationsPageRendersSavedStations(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), `value="`+adminWriteToken+`"`) {
 		t.Fatalf("body did not contain write token: %s", recorder.Body.String())
 	}
-	if strings.Contains(recorder.Body.String(), `/admin/status`) {
-		t.Fatalf("body unexpectedly contained status link: %s", recorder.Body.String())
+	if !strings.Contains(recorder.Body.String(), `href="/admin/status"`) {
+		t.Fatalf("body did not contain status nav link: %s", recorder.Body.String())
 	}
-	if strings.Contains(recorder.Body.String(), `/admin/logs`) {
-		t.Fatalf("body unexpectedly contained logs link: %s", recorder.Body.String())
+	if !strings.Contains(recorder.Body.String(), `href="/admin/logs"`) {
+		t.Fatalf("body did not contain logs nav link: %s", recorder.Body.String())
 	}
 
 	mappingReq := httptest.NewRequest(http.MethodGet, "/admin/mappings", nil)

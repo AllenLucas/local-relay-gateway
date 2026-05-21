@@ -1,19 +1,20 @@
 {{define "content"}}
-<h1>Logs And Statistics</h1>
+<h1>Logs &amp; Statistics / 日志与统计</h1>
+<p class="muted">最近 50 条请求与失败切换事件，按时间倒序。</p>
 
-<h2>Recent Requests</h2>
+<h2>Recent Requests / 最近请求</h2>
 <table>
   <thead>
     <tr>
-      <th>Protocol</th>
-      <th>Alias</th>
-      <th>Station</th>
-      <th>Status</th>
-      <th>Duration (ms)</th>
-      <th>Stream</th>
-      <th>Failover</th>
-      <th>Error Kind</th>
-      <th>Created</th>
+      <th>协议</th>
+      <th>别名</th>
+      <th>站点</th>
+      <th>状态码</th>
+      <th>耗时(ms)</th>
+      <th>流式</th>
+      <th>切换</th>
+      <th>错误类型</th>
+      <th>时间</th>
     </tr>
   </thead>
   <tbody>
@@ -22,31 +23,33 @@
       <td>{{.Protocol}}</td>
       <td>{{.Alias}}</td>
       <td>{{.StationName}}</td>
-      <td>{{.StatusCode}}</td>
+      <td>
+        {{if ge .StatusCode 500}}<span class="pill bad">{{.StatusCode}}</span>
+        {{else if ge .StatusCode 400}}<span class="pill warn">{{.StatusCode}}</span>
+        {{else}}<span class="pill ok">{{.StatusCode}}</span>{{end}}
+      </td>
       <td>{{.DurationMS}}</td>
-      <td>{{.WasStream}}</td>
-      <td>{{.DidFailover}}</td>
-      <td>{{.ErrorKind}}</td>
-      <td>{{.CreatedAt}}</td>
+      <td class="muted">{{if .WasStream}}yes{{else}}no{{end}}</td>
+      <td class="muted">{{if .DidFailover}}<span class="pill warn">failover</span>{{else}}—{{end}}</td>
+      <td class="muted">{{if .ErrorKind}}{{.ErrorKind}}{{else}}—{{end}}</td>
+      <td class="muted">{{.CreatedAt}}</td>
     </tr>
     {{else}}
-    <tr>
-      <td colspan="9">No request logs recorded yet.</td>
-    </tr>
+    <tr><td colspan="9" class="muted">No request logs recorded yet. / 暂无请求日志。</td></tr>
     {{end}}
   </tbody>
 </table>
 
-<h2>Failover Events</h2>
+<h2>Failover Events / 失败切换事件</h2>
 <table>
   <thead>
     <tr>
-      <th>Protocol</th>
-      <th>Alias</th>
+      <th>协议</th>
+      <th>别名</th>
       <th>From</th>
       <th>To</th>
-      <th>Reason</th>
-      <th>Created</th>
+      <th>原因</th>
+      <th>时间</th>
     </tr>
   </thead>
   <tbody>
@@ -56,25 +59,23 @@
       <td>{{.Alias}}</td>
       <td>{{.FromStationName}}</td>
       <td>{{.ToStationName}}</td>
-      <td>{{.Reason}}</td>
-      <td>{{.CreatedAt}}</td>
+      <td class="muted">{{.Reason}}</td>
+      <td class="muted">{{.CreatedAt}}</td>
     </tr>
     {{else}}
-    <tr>
-      <td colspan="6">No failover events recorded yet.</td>
-    </tr>
+    <tr><td colspan="6" class="muted">No failover events recorded yet. / 暂无切换事件。</td></tr>
     {{end}}
   </tbody>
 </table>
 
-<h2>Usage By Station</h2>
+<h2>Usage By Station / 按站点统计</h2>
 <table>
   <thead>
     <tr>
-      <th>Station</th>
-      <th>Alias</th>
-      <th>Requests</th>
-      <th>Errors</th>
+      <th>站点</th>
+      <th>别名</th>
+      <th>请求数</th>
+      <th>错误数</th>
     </tr>
   </thead>
   <tbody>
@@ -83,24 +84,22 @@
       <td>{{.StationName}}</td>
       <td>{{.Alias}}</td>
       <td>{{.RequestCount}}</td>
-      <td>{{.ErrorCount}}</td>
+      <td>{{if gt .ErrorCount 0}}<span class="pill bad">{{.ErrorCount}}</span>{{else}}0{{end}}</td>
     </tr>
     {{else}}
-    <tr>
-      <td colspan="4">No usage data available.</td>
-    </tr>
+    <tr><td colspan="4" class="muted">No usage data available. / 暂无数据。</td></tr>
     {{end}}
   </tbody>
 </table>
 
-<h2>Usage By Alias</h2>
+<h2>Usage By Alias / 按别名统计</h2>
 <table>
   <thead>
     <tr>
-      <th>Alias</th>
-      <th>Station</th>
-      <th>Requests</th>
-      <th>Errors</th>
+      <th>别名</th>
+      <th>站点</th>
+      <th>请求数</th>
+      <th>错误数</th>
     </tr>
   </thead>
   <tbody>
@@ -109,12 +108,10 @@
       <td>{{.Alias}}</td>
       <td>{{.StationName}}</td>
       <td>{{.RequestCount}}</td>
-      <td>{{.ErrorCount}}</td>
+      <td>{{if gt .ErrorCount 0}}<span class="pill bad">{{.ErrorCount}}</span>{{else}}0{{end}}</td>
     </tr>
     {{else}}
-    <tr>
-      <td colspan="4">No alias usage data available.</td>
-    </tr>
+    <tr><td colspan="4" class="muted">No alias usage data available. / 暂无数据。</td></tr>
     {{end}}
   </tbody>
 </table>
