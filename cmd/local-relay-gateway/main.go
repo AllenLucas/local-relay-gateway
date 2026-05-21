@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os/signal"
 	"syscall"
@@ -17,8 +18,12 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
-	store, err := sqlitestore.NewStore(cfg.DBPath)
+	bootstrap, autoOpenBrowser, err := loadBootstrap()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	store, err := sqlitestore.NewStore(bootstrap.Runtime.DBPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -35,23 +40,50 @@ func main() {
 	jobs.StartHealthLoop(rootCtx, store, selector)
 	jobs.StartRetentionLoop(rootCtx, store, 7*24*time.Hour, time.Hour)
 
-	server := &http.Server{
-		Addr:    cfg.ListenAddr,
-		Handler: newRootHandler(gateway.NewServer(cfg, store, selector)),
+	gatewayHandler := gateway.NewServer(bootstrap.Runtime, store, selector)
+	if bootstrap.Mode != config.StartupModeEnv {
+		gatewayHandler = gateway.NewServerWithOptions(gateway.Options{
+			Runtime:         bootstrap.Runtime,
+			AdminWriteToken: bootstrap.AdminWriteToken,
+			SetupMode:       bootstrap.Mode == config.StartupModeSetup,
+			RuntimeFilePath: bootstrap.RuntimeFilePath,
+			RuntimeWarning:  bootstrap.Warning,
+		}, store, selector)
 	}
 
-	log.Printf("local relay gateway listening on %s", cfg.ListenAddr)
-	if err := serveHTTP(rootCtx, server, func() {
+	server := &http.Server{
+		Addr:    bootstrap.Runtime.ListenAddr,
+		Handler: newRootHandler(gatewayHandler),
+	}
+	listener, err := net.Listen("tcp", bootstrap.Runtime.ListenAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	onReady := func() {
+		log.Printf("local relay gateway listening on %s", bootstrap.Runtime.ListenAddr)
+		if !autoOpenBrowser {
+			return
+		}
+		target := browserTarget(bootstrap.Mode, bootstrap.Runtime.ListenAddr)
+		if err := openBrowser(target); err != nil {
+			log.Printf("open browser failed: %v; open %s manually", err, target)
+		}
+	}
+	if err := serveHTTP(rootCtx, server, listener, onReady, func() {
 		log.Printf("local relay gateway shutting down")
 	}); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func serveHTTP(ctx context.Context, server *http.Server, onShutdown func()) error {
+func serveHTTP(ctx context.Context, server *http.Server, listener net.Listener, onReady func(), onShutdown func()) error {
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- server.ListenAndServe()
+		if onReady != nil {
+			onReady()
+		}
+		errCh <- server.Serve(listener)
 	}()
 
 	select {

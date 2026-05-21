@@ -50,8 +50,11 @@ func TestServeHTTPExitsWhenContextIsCanceled(t *testing.T) {
 	defer cancel()
 
 	var closed atomic.Bool
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen error = %v", err)
+	}
 	server := &http.Server{
-		Addr:    "127.0.0.1:0",
 		Handler: newRootHandler(http.NotFoundHandler()),
 		BaseContext: func(net.Listener) context.Context {
 			return ctx
@@ -60,7 +63,7 @@ func TestServeHTTPExitsWhenContextIsCanceled(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- serveHTTP(ctx, server, func() { closed.Store(true) })
+		errCh <- serveHTTP(ctx, server, listener, nil, func() { closed.Store(true) })
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -77,5 +80,55 @@ func TestServeHTTPExitsWhenContextIsCanceled(t *testing.T) {
 
 	if !closed.Load() {
 		t.Fatal("shutdown callback was not invoked")
+	}
+}
+
+func TestServeHTTPInvokesOnReadyBeforeShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen error = %v", err)
+	}
+
+	var ready atomic.Bool
+	var shutdownSawReady atomic.Bool
+	server := &http.Server{
+		Handler: newRootHandler(http.NotFoundHandler()),
+		BaseContext: func(net.Listener) context.Context {
+			return ctx
+		},
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- serveHTTP(ctx, server, listener, func() { ready.Store(true) }, func() {
+			shutdownSawReady.Store(ready.Load())
+		})
+	}()
+
+	deadline := time.After(3 * time.Second)
+	for !ready.Load() {
+		select {
+		case <-deadline:
+			t.Fatal("ready callback was not invoked")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("serveHTTP error = %v, want nil", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("serveHTTP did not exit after context cancellation")
+	}
+
+	if !shutdownSawReady.Load() {
+		t.Fatal("shutdown callback ran before ready callback")
 	}
 }
