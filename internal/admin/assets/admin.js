@@ -48,6 +48,14 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  document.querySelectorAll("button[data-confirm]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      if (!window.confirm(button.dataset.confirm)) {
+        event.preventDefault();
+      }
+    });
+  });
+
   document.querySelectorAll("[data-toggle-password]").forEach((button) => {
     button.addEventListener("click", () => {
       const target = document.getElementById(button.dataset.togglePassword);
@@ -56,5 +64,23 @@ document.addEventListener("DOMContentLoaded", () => {
       target.type = showing ? "password" : "text";
       button.textContent = showing ? "显示" : "隐藏";
     });
+  });
+
+  const localTimeFormatter = new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  document.querySelectorAll("time[data-local-time]").forEach((node) => {
+    const raw = node.getAttribute("datetime");
+    if (!raw) return;
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return;
+    node.textContent = localTimeFormatter.format(parsed);
+    node.title = raw;
   });
 });

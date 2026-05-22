@@ -32,7 +32,7 @@
       <td class="muted">{{if .WasStream}}yes{{else}}no{{end}}</td>
       <td class="muted">{{if .DidFailover}}<span class="pill warn">failover</span>{{else}}—{{end}}</td>
       <td class="muted">{{if .ErrorKind}}{{.ErrorKind}}{{else}}—{{end}}</td>
-      <td class="muted">{{.CreatedAt}}</td>
+      <td class="muted"><time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}" data-local-time>{{.CreatedAt.Format "2006-01-02 15:04:05 UTC"}}</time></td>
     </tr>
     {{else}}
     <tr><td colspan="9" class="muted">No request logs recorded yet. / 暂无请求日志。</td></tr>
@@ -60,7 +60,7 @@
       <td>{{.FromStationName}}</td>
       <td>{{.ToStationName}}</td>
       <td class="muted">{{.Reason}}</td>
-      <td class="muted">{{.CreatedAt}}</td>
+      <td class="muted"><time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}" data-local-time>{{.CreatedAt.Format "2006-01-02 15:04:05 UTC"}}</time></td>
     </tr>
     {{else}}
     <tr><td colspan="6" class="muted">No failover events recorded yet. / 暂无切换事件。</td></tr>
