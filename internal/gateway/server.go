@@ -205,7 +205,7 @@ func (s *Server) proxyNormalizedRequest(
 		if err != nil && errors.Is(err, context.Canceled) {
 			return
 		}
-		if err != nil || resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+		if shouldFailover(err, resp) {
 			errorKind = failureKind(err, resp)
 			status := s.selector.RecordFailure(target.Station, statuses[target.Station.ID], failureMessage(err, resp))
 			statuses[target.Station.ID] = status
@@ -310,11 +310,45 @@ func failureKind(err error, resp *http.Response) string {
 	if resp == nil {
 		return "upstream_error"
 	}
-	if resp.StatusCode == http.StatusTooManyRequests {
+	switch resp.StatusCode {
+	case http.StatusRequestTimeout:
+		return "timeout"
+	case http.StatusNotFound:
+		return "endpoint_not_supported"
+	case http.StatusTooManyRequests:
 		return "rate_limited"
 	}
 	if resp.StatusCode >= http.StatusInternalServerError {
 		return "upstream_error"
 	}
 	return "gateway_error"
+}
+
+// shouldFailover decides whether the gateway should treat an upstream attempt
+// as a failure and try the next candidate station.
+//
+// A 404 here means the upstream station does not implement the endpoint we
+// just called (typical for OpenAI-compatible relays that only ship
+// /v1/chat/completions and reject /v1/responses). Forwarding that 404 to the
+// client would mask a perfectly working second station — so we treat 404 as a
+// station-level failure. 401/403 stay forwarded because they almost always
+// signal a local key/permission problem the user must fix per-station; auto
+// failover would just hide it.
+func shouldFailover(err error, resp *http.Response) bool {
+	if err != nil {
+		return true
+	}
+	if resp == nil {
+		return true
+	}
+	if resp.StatusCode >= http.StatusInternalServerError {
+		return true
+	}
+	switch resp.StatusCode {
+	case http.StatusTooManyRequests,
+		http.StatusRequestTimeout,
+		http.StatusNotFound:
+		return true
+	}
+	return false
 }

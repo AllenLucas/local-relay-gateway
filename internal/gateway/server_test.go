@@ -592,6 +592,127 @@ func TestResponsesHandlerPersistsCooldownAndLogsFailoverUsage(t *testing.T) {
 	}
 }
 
+func TestResponsesHandlerFailsOverOn404(t *testing.T) {
+	firstCalls := 0
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		http.NotFound(w, r)
+	}))
+	defer first.Close()
+
+	secondCalls := 0
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_ok","status":"completed"}`))
+	}))
+	defer second.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	}()
+
+	ctx := context.Background()
+	firstID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "station-a",
+		Enabled:                      true,
+		Priority:                     20,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                first.URL,
+		OpenAIAPIKey:                 "OPENAI_A",
+		AnthropicBaseURL:             first.URL,
+		AnthropicAPIKey:              "ANTHROPIC_A",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation first error = %v", err)
+	}
+	secondID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "station-b",
+		Enabled:                      true,
+		Priority:                     10,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                second.URL,
+		OpenAIAPIKey:                 "OPENAI_B",
+		AnthropicBaseURL:             second.URL,
+		AnthropicAPIKey:              "ANTHROPIC_B",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation second error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{StationID: firstID, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true}); err != nil {
+		t.Fatalf("UpsertModelMapping first error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{StationID: secondID, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5.1", Enabled: true}); err != nil {
+		t.Fatalf("UpsertModelMapping second error = %v", err)
+	}
+
+	handler := gateway.NewServerWithOptions(gateway.Options{Runtime: config.Runtime{LocalAPIKey: "local-test-key"}}, store, routing.NewSelector(func() time.Time {
+		return time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	}))
+
+	recorder := performResponsesRequest(handler, "local-test-key", []byte(`{"model":"gpt-5","input":"hello","stream":false}`))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if firstCalls != 1 {
+		t.Fatalf("firstCalls = %d, want 1", firstCalls)
+	}
+	if secondCalls != 1 {
+		t.Fatalf("secondCalls = %d, want 1", secondCalls)
+	}
+
+	statuses, err := store.ListStationStatuses(ctx)
+	if err != nil {
+		t.Fatalf("ListStationStatuses error = %v", err)
+	}
+	if status := statuses[firstID]; status.State != "cooldown" {
+		t.Fatalf("station-a state = %q, want %q", status.State, "cooldown")
+	}
+
+	requestLogs, err := store.ListRequestLogs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListRequestLogs error = %v", err)
+	}
+	if len(requestLogs) != 1 {
+		t.Fatalf("len(requestLogs) = %d, want 1", len(requestLogs))
+	}
+	if requestLogs[0].StationName != "station-b" {
+		t.Fatalf("request log station = %q, want station-b", requestLogs[0].StationName)
+	}
+	if !requestLogs[0].DidFailover {
+		t.Fatalf("request log DidFailover = %v, want true", requestLogs[0].DidFailover)
+	}
+
+	failoverEvents, err := store.ListFailoverEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListFailoverEvents error = %v", err)
+	}
+	if len(failoverEvents) != 1 {
+		t.Fatalf("len(failoverEvents) = %d, want 1", len(failoverEvents))
+	}
+	if failoverEvents[0].FromStationName != "station-a" || failoverEvents[0].ToStationName != "station-b" {
+		t.Fatalf("failover event = %q -> %q, want station-a -> station-b", failoverEvents[0].FromStationName, failoverEvents[0].ToStationName)
+	}
+	if failoverEvents[0].Reason != "endpoint_not_supported" {
+		t.Fatalf("failover reason = %q, want endpoint_not_supported", failoverEvents[0].Reason)
+	}
+}
+
 type gatewayStationFixture struct {
 	station core.Station
 	mapping core.ModelMapping
