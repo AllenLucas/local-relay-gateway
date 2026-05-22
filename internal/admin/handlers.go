@@ -387,7 +387,7 @@ func (h *Handler) handleStations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		priority, err := parsePositiveInt(r.Form.Get("priority"))
+		priority, err := parseNonNegativeInt(r.Form.Get("priority"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -801,7 +801,7 @@ func parseStationForm(r *http.Request) (core.Station, error) {
 		return core.Station{}, err
 	}
 
-	priority, err := parsePositiveInt(r.Form.Get("priority"))
+	priority, err := parseNonNegativeInt(r.Form.Get("priority"))
 	if err != nil {
 		return core.Station{}, err
 	}
@@ -921,6 +921,24 @@ func parsePositiveInt(value string) (int, error) {
 	}
 	if parsed <= 0 {
 		return 0, errors.New("numeric input must be greater than zero")
+	}
+	return parsed, nil
+}
+
+// parseNonNegativeInt allows 0 as a sentinel value. Used for station Priority
+// where 0 means "auto" (let the scoring job rank this station dynamically) and
+// any positive value locks the station to manual priority order.
+func parseNonNegativeInt(value string) (int, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, errors.New("invalid numeric input")
+	}
+	if parsed < 0 {
+		return 0, errors.New("numeric input must be zero or greater")
 	}
 	return parsed, nil
 }

@@ -459,6 +459,49 @@ func (s *Store) DeleteRequestLogsBefore(ctx context.Context, cutoff time.Time) e
 	return err
 }
 
+func (s *Store) ListRequestLogsSince(ctx context.Context, since time.Time) ([]core.RequestLog, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT id, protocol, alias, station_name, status_code, duration_ms,
+               was_stream, did_failover, error_kind, created_at
+        FROM request_logs
+        WHERE created_at >= ?
+        ORDER BY created_at ASC, id ASC
+    `, since.Format(time.RFC3339))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []core.RequestLog
+	for rows.Next() {
+		var item core.RequestLog
+		var protocolValue string
+		var wasStream int
+		var didFailover int
+		var createdAt string
+		if err := rows.Scan(
+			&item.ID,
+			&protocolValue,
+			&item.Alias,
+			&item.StationName,
+			&item.StatusCode,
+			&item.DurationMS,
+			&wasStream,
+			&didFailover,
+			&item.ErrorKind,
+			&createdAt,
+		); err != nil {
+			return nil, err
+		}
+		item.Protocol = core.Protocol(protocolValue)
+		item.WasStream = wasStream == 1
+		item.DidFailover = didFailover == 1
+		item.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		logs = append(logs, item)
+	}
+	return logs, rows.Err()
+}
+
 func (s *Store) ListRequestLogs(ctx context.Context, limit int) ([]core.RequestLog, error) {
 	rows, err := s.db.QueryContext(ctx, `
         SELECT id, protocol, alias, station_name, status_code, duration_ms,

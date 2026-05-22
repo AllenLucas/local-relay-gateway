@@ -150,7 +150,7 @@ These values are suitable for the first primary station:
 | --- | --- | --- |
 | `name` | `relay-a` | 本地显示名称 / Local display name |
 | `enabled` | `true` | 必须启用才会参与路由 / Must be enabled to participate in routing |
-| `priority` | `100` | 数值越大越优先 / Higher value is preferred |
+| `priority` | `100` | 正数表示手动锁定（越大越先）；`0` 或留空表示自动按延迟评分（最近 15 分钟 p50×(1+错误率)，5 分钟重算，手动 &gt; 自动）/ Positive = manual lock (higher wins); `0` or empty = auto scoring (p50×(1+err_rate) over last 15 min, recomputed every 5 min; manual always outranks auto) |
 | `cooldown_seconds` | `30` | 进入冷却后的跳过时间 / Skip time after cooldown triggers |
 | `health_check_interval_seconds` | `15` | 会保存到站点记录中 / Stored with the station record |
 | `health_check_timeout_seconds` | `5` | 会保存到站点记录中 / Stored with the station record |
@@ -161,8 +161,8 @@ These values are suitable for the first primary station:
 | `anthropic_base_url` | `https://relay-a.example.invalid/anthropic` | 网关会自动补 `/v1/messages` / Gateway appends `/v1/messages` |
 | `anthropic_api_key` | `ak-relay-a-placeholder` | 上游 Anthropic 兼容密钥 / Upstream Anthropic-compatible key |
 
-如果要增加备用站点，把 `priority` 降低，例如 `50`，其余按该站点支持的协议做同样配置即可。  
-For a backup station, lower `priority` to something like `50` and fill the rest the same way for whichever protocol(s) that station supports.
+如果要增加备用站点，把 `priority` 降低（例如 `50`），或者直接填 `0`/留空让网关自动按延迟为它评分排序；其余按该站点支持的协议做同样配置即可。  
+For a backup station, either lower `priority` to something like `50` or set it to `0` / leave it empty so the gateway ranks it automatically by latency; fill the rest the same way for whichever protocol(s) that station supports.
 
 已保存的站点后续可以在 `Stations` 页面点击 `Edit` 继续修改，也可以用 `Delete` 删除当前设备上的本地站点配置。删除站点会同时删除它的映射和运行状态，但不会删除历史请求日志。  
 Saved stations can be modified later by clicking `Edit` on the `Stations` page, or removed from the current device with `Delete`. Deleting a station also deletes its mappings and runtime status, but keeps historical request logs.
@@ -329,7 +329,7 @@ curl -X POST "http://127.0.0.1:8787/anthropic/v1/messages" \
 
 ## 故障切换、健康检查与冷却 / Failover, Health, and Cooldown
 
-- 路由顺序先看 `priority`，再看站点是否启用、是否存在映射、状态是否允许。 / Routing order starts with `priority`, then checks whether the station is enabled, mapped, and in an allowed state.
+- 路由顺序：手动优先级（`priority>0`，按数值降序）的站点排在前面；`priority=0` 的站点进入自动池，按最近 15 分钟 `p50_延迟 × (1+错误率)` 评分升序排序，样本不足 10 的统一排末尾；冷却中的站点直接跳过。 / Routing order: manual stations (`priority>0`, sorted descending) come first; `priority=0` stations enter the auto pool ranked by `p50_latency × (1 + error_rate)` over the last 15 minutes (ascending), with under-sampled stations (<10 requests) pushed to the tail; cooled-down stations are skipped.
 - 请求失败的判定包括传输错误、`429` 和 `5xx`。 / Failures include transport errors, `429`, and `5xx`.
 - 一旦上游开始向客户端写入响应，当前请求就不会再切换到别的站点。 / Once an upstream has started writing to the client, that request will not fail over again.
 - 站点达到 `consecutive_failure_threshold` 后进入 `cooldown`，到期前不会被选中。 / A station enters `cooldown` after reaching `consecutive_failure_threshold` and is skipped until cooldown expires.

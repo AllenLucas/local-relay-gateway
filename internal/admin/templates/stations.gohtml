@@ -60,8 +60,8 @@
     <div class="grid-2">
       <label class="field">
         <span class="field-label">优先级 <span class="en">Priority</span></span>
-        <span class="field-hint">数字越大越先尝试，主站点用较大值，备用站点用较小值。</span>
-        <input name="priority" type="number" min="1" value="{{if .EditStation}}{{.EditStation.Priority}}{{else}}10{{end}}" required>
+        <span class="field-hint">留空或填 0 表示自动按延迟评分（最近 15 分钟 p50×(1+错误率)，每 5 分钟重排）；填正整数则手动锁定，数字越大越先尝试。手动 &gt; 自动。</span>
+        <input name="priority" type="number" min="0" value="{{if .EditStation}}{{.EditStation.Priority}}{{else}}0{{end}}">
       </label>
       <label class="field">
         <span class="field-label">冷却时间（秒）<span class="en">Cooldown seconds</span></span>
@@ -148,7 +148,7 @@
     <tr>
       <td>{{.Name}}</td>
       <td>{{if .Enabled}}<span class="pill ok">on</span>{{else}}<span class="pill">off</span>{{end}}</td>
-      <td>{{.Priority}}</td>
+      <td>{{if eq .Priority 0}}<span class="pill">auto</span>{{else}}{{.Priority}} <span class="pill ok">manual</span>{{end}}</td>
       <td class="muted">{{if .OpenAIBaseURL}}{{.OpenAIBaseURL}}{{else}}—{{end}}</td>
       <td class="muted">{{if .AnthropicBaseURL}}{{.AnthropicBaseURL}}{{else}}—{{end}}</td>
       <td>
