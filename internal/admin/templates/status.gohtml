@@ -24,7 +24,7 @@
         {{else if $status.State}}<span class="pill warn">{{$status.State}}</span>
         {{else}}<span class="pill">unknown</span>{{end}}
       </td>
-      <td class="muted">{{if $status.CooldownUntil.IsZero}}—{{else}}{{$status.CooldownUntil}}{{end}}</td>
+      <td class="muted">{{if $status.CooldownUntil.IsZero}}—{{else}}<time datetime="{{$status.CooldownUntil.Format "2006-01-02T15:04:05Z07:00"}}" data-local-time>{{$status.CooldownUntil.Format "2006-01-02 15:04:05 UTC"}}</time>{{end}}</td>
       <td>{{$status.ConsecutiveFailures}}</td>
       <td>{{$status.ConsecutiveRecoveries}}</td>
       <td class="muted">{{if $status.LastError}}{{$status.LastError}}{{else}}—{{end}}</td>

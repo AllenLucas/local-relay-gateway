@@ -1168,8 +1168,8 @@ func TestStationCreatePostRejectsNonPositiveNumericFields(t *testing.T) {
 		field string
 		value string
 	}{
-		{name: "zero priority", field: "priority", value: "0"},
 		{name: "negative cooldown", field: "cooldown_seconds", value: "-1"},
+		{name: "zero failure threshold", field: "consecutive_failure_threshold", value: "0"},
 	}
 
 	for _, tc := range testCases {
@@ -1204,6 +1204,54 @@ func TestStationCreatePostRejectsNonPositiveNumericFields(t *testing.T) {
 			}
 			if len(stations) != 0 {
 				t.Fatalf("len(stations) = %d, want 0", len(stations))
+			}
+		})
+	}
+}
+
+func TestStationCreatePostAcceptsZeroOrEmptyPriorityAsAuto(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{name: "explicit zero", value: "0"},
+		{name: "empty string", value: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "gateway.db")
+			store, err := sqlitestore.NewStore(dbPath)
+			if err != nil {
+				t.Fatalf("NewStore error = %v", err)
+			}
+			defer store.Close()
+
+			handler, err := admin.NewHandler(store, adminWriteToken)
+			if err != nil {
+				t.Fatalf("NewHandler error = %v", err)
+			}
+
+			form := validStationForm()
+			form.Set("priority", tc.value)
+
+			req := httptest.NewRequest(http.MethodPost, "/admin/stations", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+
+			if recorder.Code != http.StatusSeeOther {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusSeeOther)
+			}
+
+			stations, err := store.ListStations(context.Background())
+			if err != nil {
+				t.Fatalf("ListStations error = %v", err)
+			}
+			if len(stations) != 1 {
+				t.Fatalf("len(stations) = %d, want 1", len(stations))
+			}
+			if stations[0].Priority != 0 {
+				t.Fatalf("priority = %d, want 0 (auto mode)", stations[0].Priority)
 			}
 		})
 	}

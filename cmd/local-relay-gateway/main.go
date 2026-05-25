@@ -33,12 +33,15 @@ func main() {
 		}
 	}()
 
-	selector := routing.NewSelector(nil)
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	scoreboard := jobs.NewScoreboard()
+	selector := routing.NewSelectorWithScores(nil, scoreboard)
+
 	jobs.StartHealthLoop(rootCtx, store, selector)
 	jobs.StartRetentionLoop(rootCtx, store, 7*24*time.Hour, time.Hour)
+	jobs.StartScoringLoop(rootCtx, store, scoreboard)
 
 	gatewayHandler := gateway.NewServer(bootstrap.Runtime, store, selector)
 	if bootstrap.Mode != config.StartupModeEnv {

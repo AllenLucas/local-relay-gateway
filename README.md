@@ -89,8 +89,8 @@ If the process was started in the current foreground terminal, closing that term
 
 ## 站点配置 / Station Configuration
 
-每个站点可以保存 OpenAI、Anthropic 或两者同时保存的上游配置；至少要完整填写一组协议。优先级数字越大越先被尝试。  
-Each station can store OpenAI settings, Anthropic settings, or both; at least one protocol must be configured as a complete pair. Higher priority numbers are tried first.
+每个站点可以保存 OpenAI、Anthropic 或两者同时保存的上游配置；至少要完整填写一组协议。优先级支持两种模式：填正整数表示**手动锁定**（数字越大越先尝试）；填 `0` 或留空表示**自动模式**，由网关按最近 15 分钟 `p50 延迟 ×（1+错误率）` 评分自动排序，每 5 分钟重算一次。**手动站点永远排在自动站点之前**，所以可以把"必须先用"的付费站设为手动优先级，把可替代的备用站留作自动。  
+Each station can store OpenAI settings, Anthropic settings, or both; at least one protocol must be configured as a complete pair. Priority supports two modes: a positive integer locks the station to manual order (higher wins); `0` or empty enables auto mode, where the gateway ranks the station by `p50_latency × (1 + error_rate)` over the last 15 minutes, recomputed every 5 minutes. **Manual stations always rank above auto stations**, so put "must use first" paid endpoints on manual priority and let interchangeable backups float in the auto tier.
 
 推荐先建一个主站点，再按更低优先级补一个备用站点：  
 Create one primary station first, then add a lower-priority backup station:
@@ -99,7 +99,7 @@ Create one primary station first, then add a lower-priority backup station:
 | --- | --- | --- | --- |
 | `name` | `relay-a` | `relay-b` | 本地标识名 / Local identifier |
 | `enabled` | `true` | `true` | 禁用站点不会被选中 / Disabled stations are never selected |
-| `priority` | `100` | `50` | 数值越大越优先 / Higher value wins |
+| `priority` | `100` | `0` | 正数手动锁定（越大越先）；`0` 或留空表示自动按延迟评分 / Positive = manual lock (higher wins); `0` or empty = auto by latency score |
 | `cooldown_seconds` | `30` | `30` | 触发冷却后跳过该站点的秒数 / Seconds skipped after cooldown triggers |
 | `consecutive_failure_threshold` | `1` | `1` | 连续失败多少次进入冷却 / Failures before cooldown |
 | `consecutive_recovery_threshold` | `2` | `2` | 连续恢复多少次回到健康 / Recoveries before healthy |

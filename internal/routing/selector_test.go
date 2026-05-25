@@ -209,3 +209,179 @@ func TestRecordFailureRespectsThresholdAndRecordSuccessRecovers(t *testing.T) {
 		t.Fatalf("state after second success = %q, want %q", status.State, "healthy")
 	}
 }
+
+type fakeScoreLookup map[string]routing.StationScore
+
+func (f fakeScoreLookup) Score(protocol core.Protocol, alias string, stationID int64) (routing.StationScore, bool) {
+	key := string(protocol) + "|" + alias + "|" + intKey(stationID)
+	v, ok := f[key]
+	return v, ok
+}
+
+func intKey(id int64) string {
+	const digits = "0123456789"
+	if id == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	idx := len(buf)
+	for id > 0 {
+		idx--
+		buf[idx] = digits[id%10]
+		id /= 10
+	}
+	return string(buf[idx:])
+}
+
+func makeOpenAIStation(id int64, name string, priority int) core.Station {
+	return core.Station{
+		ID:            id,
+		Name:          name,
+		Enabled:       true,
+		Priority:      priority,
+		OpenAIBaseURL: "https://" + name + ".example.com/openai",
+		OpenAIAPIKey:  "OPENAI_" + name,
+	}
+}
+
+func TestCandidatesManualOutranksAuto(t *testing.T) {
+	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	scores := fakeScoreLookup{
+		"openai|gpt-5|2": {Score: 10, HasEnoughSamples: true}, // auto, very fast
+	}
+	selector := routing.NewSelectorWithScores(func() time.Time { return now }, scores)
+
+	req := core.NormalizedRequest{Protocol: core.ProtocolOpenAI, Alias: "gpt-5"}
+	stations := []core.Station{
+		makeOpenAIStation(1, "manual-slow", 5),
+		makeOpenAIStation(2, "auto-fast", 0),
+	}
+	mappings := []core.ModelMapping{
+		{StationID: 1, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true},
+		{StationID: 2, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true},
+	}
+
+	targets, err := selector.Candidates(req, stations, mappings, map[int64]core.StationStatus{})
+	if err != nil {
+		t.Fatalf("Candidates error = %v", err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("len(targets) = %d, want 2", len(targets))
+	}
+	if targets[0].Station.Name != "manual-slow" {
+		t.Fatalf("first = %q, want manual-slow (manual tier always before auto, regardless of score)", targets[0].Station.Name)
+	}
+	if targets[1].Station.Name != "auto-fast" {
+		t.Fatalf("second = %q, want auto-fast", targets[1].Station.Name)
+	}
+}
+
+func TestCandidatesAutoTierSortsByScore(t *testing.T) {
+	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	scores := fakeScoreLookup{
+		"openai|gpt-5|1": {Score: 800, HasEnoughSamples: true},
+		"openai|gpt-5|2": {Score: 200, HasEnoughSamples: true},
+		"openai|gpt-5|3": {Score: 500, HasEnoughSamples: true},
+	}
+	selector := routing.NewSelectorWithScores(func() time.Time { return now }, scores)
+
+	req := core.NormalizedRequest{Protocol: core.ProtocolOpenAI, Alias: "gpt-5"}
+	stations := []core.Station{
+		makeOpenAIStation(1, "slow", 0),
+		makeOpenAIStation(2, "fast", 0),
+		makeOpenAIStation(3, "medium", 0),
+	}
+	mappings := []core.ModelMapping{
+		{StationID: 1, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true},
+		{StationID: 2, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true},
+		{StationID: 3, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true},
+	}
+
+	targets, err := selector.Candidates(req, stations, mappings, map[int64]core.StationStatus{})
+	if err != nil {
+		t.Fatalf("Candidates error = %v", err)
+	}
+	if len(targets) != 3 {
+		t.Fatalf("len(targets) = %d, want 3", len(targets))
+	}
+	wantOrder := []string{"fast", "medium", "slow"}
+	for i, want := range wantOrder {
+		if targets[i].Station.Name != want {
+			t.Fatalf("targets[%d] = %q, want %q (auto tier should sort by score asc)", i, targets[i].Station.Name, want)
+		}
+	}
+}
+
+func TestCandidatesAutoTierPushesUnscoredStationsToTail(t *testing.T) {
+	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	scores := fakeScoreLookup{
+		"openai|gpt-5|1": {Score: 800, HasEnoughSamples: true},
+		"openai|gpt-5|2": {Score: 200, HasEnoughSamples: true},
+		// station 3 has no entry → treated as samples-insufficient
+		// station 4 has entry but HasEnoughSamples=false → also tail
+		"openai|gpt-5|4": {Score: 50, HasEnoughSamples: false},
+	}
+	selector := routing.NewSelectorWithScores(func() time.Time { return now }, scores)
+
+	req := core.NormalizedRequest{Protocol: core.ProtocolOpenAI, Alias: "gpt-5"}
+	stations := []core.Station{
+		makeOpenAIStation(1, "slow-scored", 0),
+		makeOpenAIStation(2, "fast-scored", 0),
+		makeOpenAIStation(3, "no-samples", 0),
+		makeOpenAIStation(4, "low-samples", 0),
+	}
+	mappings := []core.ModelMapping{
+		{StationID: 1, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true},
+		{StationID: 2, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true},
+		{StationID: 3, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true},
+		{StationID: 4, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true},
+	}
+
+	targets, err := selector.Candidates(req, stations, mappings, map[int64]core.StationStatus{})
+	if err != nil {
+		t.Fatalf("Candidates error = %v", err)
+	}
+	wantOrder := []string{"fast-scored", "slow-scored", "no-samples", "low-samples"}
+	if len(targets) != len(wantOrder) {
+		t.Fatalf("len(targets) = %d, want %d", len(targets), len(wantOrder))
+	}
+	for i, want := range wantOrder {
+		if targets[i].Station.Name != want {
+			t.Fatalf("targets[%d] = %q, want %q", i, targets[i].Station.Name, want)
+		}
+	}
+}
+
+func TestCandidatesManualTierSortsByPriorityDesc(t *testing.T) {
+	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	scores := fakeScoreLookup{
+		"openai|gpt-5|3": {Score: 100, HasEnoughSamples: true},
+	}
+	selector := routing.NewSelectorWithScores(func() time.Time { return now }, scores)
+
+	req := core.NormalizedRequest{Protocol: core.ProtocolOpenAI, Alias: "gpt-5"}
+	stations := []core.Station{
+		makeOpenAIStation(1, "low-prio", 1),
+		makeOpenAIStation(2, "high-prio", 10),
+		makeOpenAIStation(3, "auto", 0),
+	}
+	mappings := []core.ModelMapping{
+		{StationID: 1, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true},
+		{StationID: 2, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true},
+		{StationID: 3, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true},
+	}
+
+	targets, err := selector.Candidates(req, stations, mappings, map[int64]core.StationStatus{})
+	if err != nil {
+		t.Fatalf("Candidates error = %v", err)
+	}
+	wantOrder := []string{"high-prio", "low-prio", "auto"}
+	if len(targets) != len(wantOrder) {
+		t.Fatalf("len(targets) = %d, want %d", len(targets), len(wantOrder))
+	}
+	for i, want := range wantOrder {
+		if targets[i].Station.Name != want {
+			t.Fatalf("targets[%d] = %q, want %q", i, targets[i].Station.Name, want)
+		}
+	}
+}

@@ -11,11 +11,12 @@
 <section class="card">
   <p>Upload writes a full local configuration snapshot to WebDAV. Pull treats the newest remote snapshot as authoritative and replaces local stations and mappings to match it.</p>
   <p class="muted">The snapshot includes station upstream API keys and mappings. It does not include the Local API Key, runtime file path, listen address, database path, status, or logs.</p>
+  <p class="muted">Upload 和 Pull 共用同一组 WebDAV 凭据。Device name 仅在 Upload 时写入远端文件名，Pull 时忽略。</p>
 </section>
 
 <form class="card" method="post" action="/admin/sync/upload">
   <input type="hidden" name="write_token" value="{{.WriteToken}}">
-  <h2>Upload Local Snapshot</h2>
+  <h2>WebDAV Endpoint</h2>
   <div class="grid-2">
     <label class="field">
       <span class="field-label">WebDAV URL</span>
@@ -24,7 +25,7 @@
     </label>
     <label class="field">
       <span class="field-label">Device name</span>
-      <span class="field-hint">Used in the remote filename with the upload timestamp.</span>
+      <span class="field-hint">Used in the remote filename when uploading; ignored on pull.</span>
       <input name="device_name" value="{{.DeviceName}}" required>
     </label>
     <label class="field">
@@ -36,36 +37,14 @@
       <input name="password" type="password" autocomplete="new-password">
     </label>
   </div>
-  <div class="actions">
+  <div class="actions actions-split">
     <button type="submit">Upload Current Config</button>
-  </div>
-</form>
-
-<form class="card" method="post" action="/admin/sync/pull" data-confirm="Pull remote config and replace local stations and mappings?">
-  <input type="hidden" name="write_token" value="{{.WriteToken}}">
-  <h2>Pull Remote Snapshot</h2>
-  <div class="grid-2">
-    <label class="field">
-      <span class="field-label">WebDAV URL</span>
-      <span class="field-hint">The newest snapshot under allenlucasAIProxyTool/ will be applied.</span>
-      <input name="webdav_url" placeholder="https://dav.example.com/local-relay-gateway/" required>
-    </label>
-    <label class="field">
-      <span class="field-label">Device name</span>
-      <span class="field-hint">Only used if you upload later from this form.</span>
-      <input name="device_name" value="{{.DeviceName}}" required>
-    </label>
-    <label class="field">
-      <span class="field-label">Username</span>
-      <input name="username" autocomplete="username">
-    </label>
-    <label class="field">
-      <span class="field-label">Password / Token</span>
-      <input name="password" type="password" autocomplete="new-password">
-    </label>
-  </div>
-  <div class="actions">
-    <button type="submit">Pull Remote Config</button>
+    <button type="submit"
+            class="subtle"
+            formaction="/admin/sync/pull"
+            data-confirm="Pull remote config and replace local stations and mappings?">
+      Pull Remote Config
+    </button>
   </div>
 </form>
 {{end}}
