@@ -18,13 +18,24 @@ jobs:
   release:
     name: Build & publish Windows binaries
     runs-on: ubuntu-latest
-    env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            release_tag="${{ inputs.tag }}"
+            git fetch --force --tags
+            git checkout "$release_tag"
+          else
+            release_tag="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -78,7 +89,7 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
-          tag_name: ${{ env.RELEASE_TAG }}
+          tag_name: ${{ steps.release.outputs.tag }}
           files: |
             dist/*.exe
             dist/SHA256SUMS.txt
