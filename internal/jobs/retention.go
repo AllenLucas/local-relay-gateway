@@ -7,6 +7,7 @@ import (
 
 type retentionStore interface {
 	DeleteRequestLogsBefore(ctx context.Context, cutoff time.Time) error
+	DeleteUpstreamErrorLogsBefore(ctx context.Context, cutoff time.Time) error
 }
 
 func StartRetentionLoop(ctx context.Context, store retentionStore, keep time.Duration, every time.Duration) {
@@ -22,7 +23,9 @@ func StartRetentionLoop(ctx context.Context, store retentionStore, keep time.Dur
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_ = store.DeleteRequestLogsBefore(ctx, time.Now().Add(-keep))
+				cutoff := time.Now().Add(-keep)
+				_ = store.DeleteRequestLogsBefore(ctx, cutoff)
+				_ = store.DeleteUpstreamErrorLogsBefore(ctx, cutoff)
 			}
 		}
 	}()

@@ -1,12 +1,16 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"relay-gateway/internal/admin"
@@ -38,6 +42,9 @@ type store interface {
 	InsertRequestLog(ctx context.Context, entry core.RequestLog) error
 	ListFailoverEvents(ctx context.Context, limit int) ([]core.FailoverEvent, error)
 	InsertFailoverEvent(ctx context.Context, event core.FailoverEvent) error
+	InsertUpstreamErrorLog(ctx context.Context, entry core.UpstreamErrorLog) error
+	ListUpstreamErrorLogs(ctx context.Context, limit int) ([]core.UpstreamErrorLog, error)
+	ListRecentUpstreamErrorLogsByStation(ctx context.Context, limitPerStation int) (map[string][]core.UpstreamErrorLog, error)
 	UsageByStation(ctx context.Context) ([]core.UsageRow, error)
 	UsageByAlias(ctx context.Context) ([]core.UsageRow, error)
 }
@@ -51,6 +58,8 @@ type Server struct {
 }
 
 type requestBuilder func(target core.ResolvedTarget, normalized core.NormalizedRequest) (*http.Request, error)
+
+const upstreamErrorBodyLogLimit = 10 * 1024
 
 type Options struct {
 	Runtime         config.Runtime
@@ -181,6 +190,7 @@ func (s *Server) proxyNormalizedRequest(
 	var attempted *core.ResolvedTarget
 	var didFailover bool
 	var errorKind string
+	var attemptFailures []string
 	for _, target := range targets {
 		attempted = &target
 		if previous != nil {
@@ -205,8 +215,20 @@ func (s *Server) proxyNormalizedRequest(
 		if err != nil && errors.Is(err, context.Canceled) {
 			return
 		}
-		if shouldFailover(err, resp) {
-			errorKind = failureKind(err, resp)
+		var captured *capturedUpstreamError
+		if err == nil && resp != nil && resp.StatusCode >= http.StatusBadRequest {
+			var captureErr error
+			captured, captureErr = captureUpstreamError(resp)
+			if captureErr != nil {
+				err = captureErr
+			} else if captured != nil {
+				logKind := upstreamHTTPErrorKind(resp, captured.Body)
+				_ = s.store.InsertUpstreamErrorLog(ctx, upstreamErrorLog(normalized, target.Station.Name, resp.StatusCode, logKind, captured))
+			}
+		}
+		if shouldFailover(err, resp, captured) {
+			errorKind = failureKind(err, resp, captured)
+			attemptFailures = append(attemptFailures, attemptFailureMessage(target.Station.Name, err, resp, errorKind))
 			status := s.selector.RecordFailure(target.Station, statuses[target.Station.ID], failureMessage(err, resp))
 			statuses[target.Station.ID] = status
 			_ = s.store.SaveStationStatus(ctx, status)
@@ -234,6 +256,10 @@ func (s *Server) proxyNormalizedRequest(
 
 	if attempted != nil {
 		_ = s.store.InsertRequestLog(ctx, requestLog(normalized, attempted.Station.Name, http.StatusBadGateway, startedAt, didFailover, errorKind))
+	}
+	if len(attemptFailures) > 0 {
+		http.Error(w, "all upstream stations failed: "+strings.Join(attemptFailures, "; "), http.StatusBadGateway)
+		return
 	}
 	http.Error(w, "all upstream stations failed", http.StatusBadGateway)
 }
@@ -300,7 +326,7 @@ func failureMessage(err error, resp *http.Response) string {
 	return "upstream failure"
 }
 
-func failureKind(err error, resp *http.Response) string {
+func failureKind(err error, resp *http.Response, captured *capturedUpstreamError) string {
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return "timeout"
@@ -309,6 +335,11 @@ func failureKind(err error, resp *http.Response) string {
 	}
 	if resp == nil {
 		return "upstream_error"
+	}
+	if captured != nil {
+		if kind := semanticFailoverKind(resp.StatusCode, captured.Body); kind != "" {
+			return kind
+		}
 	}
 	switch resp.StatusCode {
 	case http.StatusRequestTimeout:
@@ -334,7 +365,7 @@ func failureKind(err error, resp *http.Response) string {
 // station-level failure. 401/403 stay forwarded because they almost always
 // signal a local key/permission problem the user must fix per-station; auto
 // failover would just hide it.
-func shouldFailover(err error, resp *http.Response) bool {
+func shouldFailover(err error, resp *http.Response, captured *capturedUpstreamError) bool {
 	if err != nil {
 		return true
 	}
@@ -344,6 +375,9 @@ func shouldFailover(err error, resp *http.Response) bool {
 	if resp.StatusCode >= http.StatusInternalServerError {
 		return true
 	}
+	if captured != nil && semanticFailoverKind(resp.StatusCode, captured.Body) != "" {
+		return true
+	}
 	switch resp.StatusCode {
 	case http.StatusTooManyRequests,
 		http.StatusRequestTimeout,
@@ -351,4 +385,193 @@ func shouldFailover(err error, resp *http.Response) bool {
 		return true
 	}
 	return false
+}
+
+type capturedUpstreamError struct {
+	Body      string
+	Headers   string
+	Truncated bool
+}
+
+func captureUpstreamError(resp *http.Response) (*capturedUpstreamError, error) {
+	if resp == nil || resp.Body == nil {
+		return nil, nil
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+
+	logBody := body
+	truncated := false
+	if len(logBody) > upstreamErrorBodyLogLimit {
+		logBody = logBody[:upstreamErrorBodyLogLimit]
+		truncated = true
+	}
+
+	return &capturedUpstreamError{
+		Body:      string(logBody),
+		Headers:   upstreamErrorHeaders(resp.Header),
+		Truncated: truncated,
+	}, nil
+}
+
+func upstreamErrorHeaders(header http.Header) string {
+	allowed := []string{
+		"cf-ray",
+		"request-id",
+		"x-request-id",
+		"x-correlation-id",
+		"openai-processing-ms",
+		"content-type",
+	}
+	out := make(map[string][]string)
+	for _, key := range allowed {
+		if values := header.Values(key); len(values) > 0 {
+			out[key] = values
+		}
+	}
+	if len(out) == 0 {
+		return "{}"
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+func upstreamHTTPErrorKind(resp *http.Response, body string) string {
+	if resp == nil {
+		return "upstream_error"
+	}
+	if kind := semanticFailoverKind(resp.StatusCode, body); kind != "" {
+		return kind
+	}
+	switch resp.StatusCode {
+	case http.StatusTooManyRequests:
+		return "rate_limited"
+	case http.StatusRequestTimeout:
+		return "timeout"
+	case http.StatusNotFound:
+		return "endpoint_not_supported"
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "auth_or_permission"
+	}
+	if resp.StatusCode >= http.StatusInternalServerError {
+		return "upstream_error"
+	}
+	return "upstream_http_error"
+}
+
+func semanticFailoverKind(statusCode int, body string) string {
+	if statusCode != http.StatusPaymentRequired && statusCode != http.StatusForbidden {
+		return ""
+	}
+	lower := strings.ToLower(body)
+	switch {
+	case containsAny(lower,
+		"subscription_not_found",
+		"no active subscription",
+		"subscription not found",
+		"订阅不存在",
+		"无有效订阅",
+		"没有有效订阅",
+	):
+		return "subscription_not_found"
+	case containsAny(lower,
+		"insufficient balance",
+		"insufficient credit",
+		"insufficient credits",
+		"out of credit",
+		"out of credits",
+		"余额不足",
+		"账户余额",
+		"账号余额",
+		"额度不足",
+		"无可用额度",
+		"欠费",
+		"充值",
+	):
+		return "insufficient_balance"
+	case containsAny(lower,
+		"usage limit",
+		"usage quota",
+		"quota exceeded",
+		"quota limit",
+		"limit exceeded",
+		"rate limit exceeded",
+		"已达到用量上限",
+		"用量上限",
+		"达到上限",
+		"超出限制",
+		"限制使用",
+		"受限制",
+	):
+		return "quota_limited"
+	case containsAny(lower,
+		"model unavailable",
+		"model not available",
+		"model is not available",
+		"model unsupported",
+		"unsupported model",
+		"model not found",
+		"模型不可用",
+		"模型不存在",
+		"不支持该模型",
+	):
+		return "model_unavailable"
+	case containsAny(lower,
+		"payment required",
+		"billing required",
+		"billing issue",
+		"billing",
+		"需要付费",
+		"支付",
+	):
+		return "billing_required"
+	default:
+		return ""
+	}
+}
+
+func containsAny(value string, patterns ...string) bool {
+	for _, pattern := range patterns {
+		if strings.Contains(value, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func upstreamErrorLog(req core.NormalizedRequest, stationName string, statusCode int, errorKind string, captured *capturedUpstreamError) core.UpstreamErrorLog {
+	if errorKind == "" {
+		errorKind = "upstream_http_error"
+	}
+	entry := core.UpstreamErrorLog{
+		Protocol:    req.Protocol,
+		Alias:       req.Alias,
+		StationName: stationName,
+		StatusCode:  statusCode,
+		ErrorKind:   errorKind,
+		CreatedAt:   time.Now().UTC(),
+	}
+	if captured != nil {
+		entry.Body = captured.Body
+		entry.Headers = captured.Headers
+		entry.Truncated = captured.Truncated
+	}
+	return entry
+}
+
+func attemptFailureMessage(stationName string, err error, resp *http.Response, errorKind string) string {
+	if err != nil {
+		return fmt.Sprintf("%s: %s", stationName, errorKind)
+	}
+	if resp != nil {
+		return fmt.Sprintf("%s: %d %s", stationName, resp.StatusCode, errorKind)
+	}
+	return fmt.Sprintf("%s: %s", stationName, errorKind)
 }

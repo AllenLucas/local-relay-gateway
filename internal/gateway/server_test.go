@@ -713,6 +713,187 @@ func TestResponsesHandlerFailsOverOn404(t *testing.T) {
 	}
 }
 
+func TestResponsesHandlerFailsOverOnQuotaLimited402AndLogsUpstreamError(t *testing.T) {
+	firstCalls := 0
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("cf-ray", "a01981ef0b7b9bda-SIN")
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = w.Write([]byte(`{"error":"已达到用量上限，将在5月28日下午3点42分（北京时间）恢复"}`))
+	}))
+	defer first.Close()
+
+	secondCalls := 0
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_ok","status":"completed"}`))
+	}))
+	defer second.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	}()
+
+	ctx := context.Background()
+	firstID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "station-a",
+		Enabled:                      true,
+		Priority:                     20,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                first.URL,
+		OpenAIAPIKey:                 "OPENAI_A",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation first error = %v", err)
+	}
+	secondID, err := store.CreateStation(ctx, core.Station{
+		Name:                         "station-b",
+		Enabled:                      true,
+		Priority:                     10,
+		CooldownSeconds:              30,
+		HealthCheckIntervalSeconds:   15,
+		HealthCheckTimeoutSeconds:    5,
+		ConsecutiveFailureThreshold:  1,
+		ConsecutiveRecoveryThreshold: 2,
+		OpenAIBaseURL:                second.URL,
+		OpenAIAPIKey:                 "OPENAI_B",
+	})
+	if err != nil {
+		t.Fatalf("CreateStation second error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{StationID: firstID, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true}); err != nil {
+		t.Fatalf("UpsertModelMapping first error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{StationID: secondID, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5.1", Enabled: true}); err != nil {
+		t.Fatalf("UpsertModelMapping second error = %v", err)
+	}
+
+	handler := gateway.NewServer(config.Runtime{LocalAPIKey: "local-test-key"}, store, routing.NewSelector(func() time.Time {
+		return time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	}))
+
+	recorder := performResponsesRequest(handler, "local-test-key", []byte(`{"model":"gpt-5","input":"hello","stream":false}`))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if firstCalls != 1 || secondCalls != 1 {
+		t.Fatalf("calls first=%d second=%d, want 1/1", firstCalls, secondCalls)
+	}
+
+	upstreamErrors, err := store.ListUpstreamErrorLogs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListUpstreamErrorLogs error = %v", err)
+	}
+	if len(upstreamErrors) != 1 {
+		t.Fatalf("len(upstreamErrors) = %d, want 1", len(upstreamErrors))
+	}
+	got := upstreamErrors[0]
+	if got.StationName != "station-a" || got.StatusCode != http.StatusPaymentRequired || got.ErrorKind != "quota_limited" {
+		t.Fatalf("upstream error = %+v, want station-a 402 quota_limited", got)
+	}
+	if !strings.Contains(got.Body, "已达到用量上限") {
+		t.Fatalf("upstream body = %q, want original body", got.Body)
+	}
+	if !strings.Contains(got.Headers, "a01981ef0b7b9bda-SIN") {
+		t.Fatalf("upstream headers = %q, want cf-ray", got.Headers)
+	}
+	if got.Truncated {
+		t.Fatal("upstream error was unexpectedly truncated")
+	}
+
+	failoverEvents, err := store.ListFailoverEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListFailoverEvents error = %v", err)
+	}
+	if len(failoverEvents) != 1 {
+		t.Fatalf("len(failoverEvents) = %d, want 1", len(failoverEvents))
+	}
+	if failoverEvents[0].Reason != "quota_limited" {
+		t.Fatalf("failover reason = %q, want quota_limited", failoverEvents[0].Reason)
+	}
+}
+
+func TestResponsesHandlerFailsOverOnSubscription403AndReturnsSummaryWhenAllStationsFail(t *testing.T) {
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("request-id", "eccec991-3718-43b5-b6d0-77b7a94ca33a")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"code":"SUBSCRIPTION_NOT_FOUND","message":"No active subscription found for this group"}`))
+	}))
+	defer first.Close()
+
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = w.Write([]byte(`{"error":"insufficient balance"}`))
+	}))
+	defer second.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	firstID, err := store.CreateStation(ctx, core.Station{Name: "station-a", Enabled: true, Priority: 20, CooldownSeconds: 30, HealthCheckIntervalSeconds: 15, HealthCheckTimeoutSeconds: 5, ConsecutiveFailureThreshold: 1, ConsecutiveRecoveryThreshold: 2, OpenAIBaseURL: first.URL, OpenAIAPIKey: "OPENAI_A"})
+	if err != nil {
+		t.Fatalf("CreateStation first error = %v", err)
+	}
+	secondID, err := store.CreateStation(ctx, core.Station{Name: "station-b", Enabled: true, Priority: 10, CooldownSeconds: 30, HealthCheckIntervalSeconds: 15, HealthCheckTimeoutSeconds: 5, ConsecutiveFailureThreshold: 1, ConsecutiveRecoveryThreshold: 2, OpenAIBaseURL: second.URL, OpenAIAPIKey: "OPENAI_B"})
+	if err != nil {
+		t.Fatalf("CreateStation second error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{StationID: firstID, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true}); err != nil {
+		t.Fatalf("UpsertModelMapping first error = %v", err)
+	}
+	if err := store.UpsertModelMapping(ctx, core.ModelMapping{StationID: secondID, Protocol: core.ProtocolOpenAI, Alias: "gpt-5", UpstreamModel: "gpt-5", Enabled: true}); err != nil {
+		t.Fatalf("UpsertModelMapping second error = %v", err)
+	}
+
+	handler := gateway.NewServer(config.Runtime{LocalAPIKey: "local-test-key"}, store, routing.NewSelector(nil))
+	recorder := performResponsesRequest(handler, "local-test-key", []byte(`{"model":"gpt-5","input":"hello","stream":false}`))
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "station-a: 403 subscription_not_found") {
+		t.Fatalf("body did not summarize station-a subscription failure: %s", body)
+	}
+	if !strings.Contains(body, "station-b: 402 insufficient_balance") {
+		t.Fatalf("body did not summarize station-b balance failure: %s", body)
+	}
+
+	upstreamErrors, err := store.ListUpstreamErrorLogs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListUpstreamErrorLogs error = %v", err)
+	}
+	if len(upstreamErrors) != 2 {
+		t.Fatalf("len(upstreamErrors) = %d, want 2", len(upstreamErrors))
+	}
+	if upstreamErrors[1].ErrorKind != "subscription_not_found" || !strings.Contains(upstreamErrors[1].Headers, "eccec991") {
+		t.Fatalf("first upstream error = %+v, want subscription_not_found with request id", upstreamErrors[1])
+	}
+	if upstreamErrors[0].ErrorKind != "insufficient_balance" {
+		t.Fatalf("second upstream error kind = %q, want insufficient_balance", upstreamErrors[0].ErrorKind)
+	}
+}
+
 type gatewayStationFixture struct {
 	station core.Station
 	mapping core.ModelMapping

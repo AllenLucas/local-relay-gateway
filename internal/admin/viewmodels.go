@@ -28,15 +28,17 @@ type MappingsPage struct {
 }
 
 type StatusPage struct {
-	Title    string
-	Stations []core.Station
-	Statuses map[int64]core.StationStatus
+	Title                string
+	Stations             []core.Station
+	Statuses             map[int64]core.StationStatus
+	RecentUpstreamErrors map[string][]core.UpstreamErrorLog
 }
 
 type LogsPage struct {
 	Title          string
 	RequestLogs    []core.RequestLog
 	FailoverEvents []core.FailoverEvent
+	UpstreamErrors []core.UpstreamErrorLog
 	UsageByStation []core.UsageRow
 	UsageByAlias   []core.UsageRow
 }

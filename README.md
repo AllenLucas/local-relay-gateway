@@ -206,3 +206,12 @@ On Windows startup without runtime environment variables, the default is `%Local
 **可以绑定到非 localhost 吗？**  
 可以，通过 `LRG_LISTEN_ADDR` 修改；但这会让本地 Admin 和代理入口暴露到更广的网络范围，应该配合额外访问控制。  
 Yes, via `LRG_LISTEN_ADDR`; but doing so exposes the admin and proxy endpoints more broadly and should be paired with additional access controls.
+
+## Upstream Error Failover And Diagnostics
+
+- `2xx` upstream responses are treated as successful gateway responses.
+- Transport errors, `408`, `404`, `429`, and `5xx` continue to count as failover failures.
+- `402` and `403` responses are inspected before passthrough. If the upstream body indicates quota exhaustion, insufficient balance, missing subscription, billing required, or model unavailable, the gateway records the upstream error detail and tries the next eligible station.
+- Unrecognized `402` and `403` responses are forwarded to the client and still recorded as upstream passthrough error details for diagnosis.
+- Upstream passthrough error bodies are stored in full up to 10KB. Longer bodies are truncated and marked. Only diagnostic response headers such as `cf-ray`, `request-id`, `x-request-id`, `x-correlation-id`, `openai-processing-ms`, and `content-type` are retained.
+- `/admin/logs` shows recent upstream passthrough error details. `/admin/status` shows recent upstream error details per station.

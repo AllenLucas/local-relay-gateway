@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
@@ -339,6 +340,18 @@ func TestStoreDeletesStationConfigWithoutDeletingHistory(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertRequestLog error = %v", err)
 	}
+	if err := store.InsertUpstreamErrorLog(ctx, core.UpstreamErrorLog{
+		Protocol:    core.ProtocolOpenAI,
+		Alias:       "gpt-5",
+		StationName: "station-a",
+		StatusCode:  http.StatusPaymentRequired,
+		ErrorKind:   "quota_limited",
+		Body:        `{"error":"quota exceeded"}`,
+		Headers:     `{"cf-ray":["abc"]}`,
+		CreatedAt:   time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("InsertUpstreamErrorLog error = %v", err)
+	}
 
 	if err := store.DeleteStation(ctx, stationID); err != nil {
 		t.Fatalf("DeleteStation error = %v", err)
@@ -371,6 +384,75 @@ func TestStoreDeletesStationConfigWithoutDeletingHistory(t *testing.T) {
 	}
 	if len(logs) != 1 || logs[0].StationName != "station-a" {
 		t.Fatalf("logs after delete = %+v, want station-a history retained", logs)
+	}
+	upstreamErrors, err := store.ListUpstreamErrorLogs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListUpstreamErrorLogs error = %v", err)
+	}
+	if len(upstreamErrors) != 1 || upstreamErrors[0].StationName != "station-a" {
+		t.Fatalf("upstream errors after delete = %+v, want station-a history retained", upstreamErrors)
+	}
+}
+
+func TestStorePersistsUpstreamErrorLogs(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	first := core.UpstreamErrorLog{
+		Protocol:    core.ProtocolOpenAI,
+		Alias:       "gpt-5",
+		StationName: "station-a",
+		StatusCode:  http.StatusForbidden,
+		ErrorKind:   "subscription_not_found",
+		Body:        `{"code":"SUBSCRIPTION_NOT_FOUND"}`,
+		Headers:     `{"request-id":["abc"]}`,
+		Truncated:   false,
+		CreatedAt:   time.Date(2026, 5, 26, 1, 0, 0, 0, time.UTC),
+	}
+	second := core.UpstreamErrorLog{
+		Protocol:    core.ProtocolOpenAI,
+		Alias:       "gpt-5",
+		StationName: "station-b",
+		StatusCode:  http.StatusPaymentRequired,
+		ErrorKind:   "insufficient_balance",
+		Body:        `{"error":"insufficient balance"}`,
+		Headers:     `{"cf-ray":["ray"]}`,
+		Truncated:   true,
+		CreatedAt:   time.Date(2026, 5, 26, 2, 0, 0, 0, time.UTC),
+	}
+	if err := store.InsertUpstreamErrorLog(ctx, first); err != nil {
+		t.Fatalf("InsertUpstreamErrorLog first error = %v", err)
+	}
+	if err := store.InsertUpstreamErrorLog(ctx, second); err != nil {
+		t.Fatalf("InsertUpstreamErrorLog second error = %v", err)
+	}
+
+	logs, err := store.ListUpstreamErrorLogs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListUpstreamErrorLogs error = %v", err)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("len(logs) = %d, want 2", len(logs))
+	}
+	if logs[0].StationName != "station-b" || logs[0].ErrorKind != "insufficient_balance" || !logs[0].Truncated {
+		t.Fatalf("newest log = %+v, want station-b insufficient_balance truncated", logs[0])
+	}
+	if logs[1].StationName != "station-a" || logs[1].ErrorKind != "subscription_not_found" || logs[1].Truncated {
+		t.Fatalf("oldest log = %+v, want station-a subscription_not_found not truncated", logs[1])
+	}
+
+	byStation, err := store.ListRecentUpstreamErrorLogsByStation(ctx, 5)
+	if err != nil {
+		t.Fatalf("ListRecentUpstreamErrorLogsByStation error = %v", err)
+	}
+	if len(byStation["station-a"]) != 1 || len(byStation["station-b"]) != 1 {
+		t.Fatalf("byStation = %+v, want one log per station", byStation)
 	}
 }
 
@@ -612,10 +694,36 @@ func TestStoreSummarizesUsageAndPrunesOldLogs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InsertRequestLog current error = %v", err)
 	}
+	if err := store.InsertUpstreamErrorLog(ctx, core.UpstreamErrorLog{
+		Protocol:    core.ProtocolOpenAI,
+		Alias:       "gpt-5",
+		StationName: "station-a",
+		StatusCode:  http.StatusPaymentRequired,
+		ErrorKind:   "quota_limited",
+		Body:        `{"error":"old quota"}`,
+		CreatedAt:   cutoff.Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("InsertUpstreamErrorLog old error = %v", err)
+	}
+	if err := store.InsertUpstreamErrorLog(ctx, core.UpstreamErrorLog{
+		Protocol:    core.ProtocolOpenAI,
+		Alias:       "gpt-5",
+		StationName: "station-b",
+		StatusCode:  http.StatusForbidden,
+		ErrorKind:   "subscription_not_found",
+		Body:        `{"error":"current subscription"}`,
+		CreatedAt:   now,
+	}); err != nil {
+		t.Fatalf("InsertUpstreamErrorLog current error = %v", err)
+	}
 
 	err = store.DeleteRequestLogsBefore(ctx, cutoff)
 	if err != nil {
 		t.Fatalf("DeleteRequestLogsBefore error = %v", err)
+	}
+	err = store.DeleteUpstreamErrorLogsBefore(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("DeleteUpstreamErrorLogsBefore error = %v", err)
 	}
 
 	rows, err := store.UsageByStation(ctx)
@@ -636,5 +744,15 @@ func TestStoreSummarizesUsageAndPrunesOldLogs(t *testing.T) {
 	}
 	if rows[0].ErrorCount != 0 {
 		t.Fatalf("ErrorCount = %d, want 0", rows[0].ErrorCount)
+	}
+	upstreamErrors, err := store.ListUpstreamErrorLogs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListUpstreamErrorLogs error = %v", err)
+	}
+	if len(upstreamErrors) != 1 {
+		t.Fatalf("len(upstreamErrors) = %d, want 1", len(upstreamErrors))
+	}
+	if upstreamErrors[0].StationName != "station-b" {
+		t.Fatalf("upstream error station = %q, want station-b", upstreamErrors[0].StationName)
 	}
 }

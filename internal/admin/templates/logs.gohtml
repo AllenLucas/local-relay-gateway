@@ -115,4 +115,43 @@
     {{end}}
   </tbody>
 </table>
+
+<h2>Upstream Errors / 上游透传错误</h2>
+<table>
+  <thead>
+    <tr>
+      <th>协议</th>
+      <th>别名</th>
+      <th>站点</th>
+      <th>状态码</th>
+      <th>分类</th>
+      <th>详情</th>
+      <th>时间</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .UpstreamErrors}}
+    <tr>
+      <td>{{.Protocol}}</td>
+      <td>{{.Alias}}</td>
+      <td>{{.StationName}}</td>
+      <td>
+        {{if ge .StatusCode 500}}<span class="pill bad">{{.StatusCode}}</span>
+        {{else}}<span class="pill warn">{{.StatusCode}}</span>{{end}}
+      </td>
+      <td class="muted">{{.ErrorKind}}</td>
+      <td>
+        <details>
+          <summary>body{{if .Truncated}} (truncated){{end}}</summary>
+          <pre style="white-space: pre-wrap; max-width: 720px; overflow-x: auto;">{{.Body}}</pre>
+          <p class="muted">headers: {{.Headers}}</p>
+        </details>
+      </td>
+      <td class="muted"><time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}" data-local-time>{{.CreatedAt.Format "2006-01-02 15:04:05 UTC"}}</time></td>
+    </tr>
+    {{else}}
+    <tr><td colspan="7" class="muted">No upstream error details recorded yet. / 暂无上游透传错误详情。</td></tr>
+    {{end}}
+  </tbody>
+</table>
 {{end}}

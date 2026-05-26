@@ -1,16 +1,17 @@
 {{define "content"}}
 <h1>Live Status / 站点实时状态</h1>
-<p class="muted">后台每 15 秒探测一次上游可达性，下面是最近一次检查的结果。</p>
+<p class="muted">后台健康检查会更新站点状态；只有上游返回 HTTP 错误响应体时才记录透传错误详情。</p>
 
 <table>
   <thead>
     <tr>
-      <th>站点</th>
-      <th>状态</th>
-      <th>冷却到期</th>
-      <th>连续失败</th>
-      <th>连续恢复</th>
-      <th>最近错误</th>
+      <th>站点 / Station</th>
+      <th>状态 / State</th>
+      <th>冷却到期 / Cooldown</th>
+      <th>失败 / Failures</th>
+      <th>恢复 / Recoveries</th>
+      <th>最近错误 / Last error</th>
+      <th>上游详情 / Upstream details</th>
     </tr>
   </thead>
   <tbody>
@@ -24,13 +25,28 @@
         {{else if $status.State}}<span class="pill warn">{{$status.State}}</span>
         {{else}}<span class="pill">unknown</span>{{end}}
       </td>
-      <td class="muted">{{if $status.CooldownUntil.IsZero}}—{{else}}<time datetime="{{$status.CooldownUntil.Format "2006-01-02T15:04:05Z07:00"}}" data-local-time>{{$status.CooldownUntil.Format "2006-01-02 15:04:05 UTC"}}</time>{{end}}</td>
+      <td class="muted">{{if $status.CooldownUntil.IsZero}}-{{else}}<time datetime="{{$status.CooldownUntil.Format "2006-01-02T15:04:05Z07:00"}}" data-local-time>{{$status.CooldownUntil.Format "2006-01-02 15:04:05 UTC"}}</time>{{end}}</td>
       <td>{{$status.ConsecutiveFailures}}</td>
       <td>{{$status.ConsecutiveRecoveries}}</td>
-      <td class="muted">{{if $status.LastError}}{{$status.LastError}}{{else}}—{{end}}</td>
+      <td class="muted">{{if $status.LastError}}{{$status.LastError}}{{else}}-{{end}}</td>
+      <td>
+        {{$errors := index $.RecentUpstreamErrors .Name}}
+        {{if $errors}}
+        <details>
+          <summary>{{len $errors}} recent / 最近错误</summary>
+          {{range $errors}}
+          <p class="muted">{{.Protocol}} / {{.Alias}} / {{.StatusCode}} / {{.ErrorKind}} / <time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}" data-local-time>{{.CreatedAt.Format "2006-01-02 15:04:05 UTC"}}</time></p>
+          <pre style="white-space: pre-wrap; max-width: 520px; overflow-x: auto;">{{.Body}}</pre>
+          {{if .Headers}}<p class="muted">headers: {{.Headers}}</p>{{end}}
+          {{end}}
+        </details>
+        {{else}}
+        <span class="muted">-</span>
+        {{end}}
+      </td>
     </tr>
     {{else}}
-    <tr><td colspan="6" class="muted">No stations configured yet. / 还没有站点。</td></tr>
+    <tr><td colspan="7" class="muted">No stations configured yet. / 还没有站点。</td></tr>
     {{end}}
   </tbody>
 </table>

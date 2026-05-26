@@ -59,4 +59,17 @@ CREATE TABLE IF NOT EXISTS failover_events (
     reason TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS upstream_error_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    protocol TEXT NOT NULL,
+    alias TEXT NOT NULL,
+    station_name TEXT NOT NULL,
+    status_code INTEGER NOT NULL,
+    error_kind TEXT NOT NULL,
+    body TEXT NOT NULL,
+    headers TEXT NOT NULL,
+    truncated INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
 `

@@ -95,6 +95,19 @@ type FailoverEvent struct {
 	CreatedAt       time.Time
 }
 
+type UpstreamErrorLog struct {
+	ID          int64
+	Protocol    Protocol
+	Alias       string
+	StationName string
+	StatusCode  int
+	ErrorKind   string
+	Body        string
+	Headers     string
+	Truncated   bool
+	CreatedAt   time.Time
+}
+
 type UsageRow struct {
 	StationName  string
 	Alias        string

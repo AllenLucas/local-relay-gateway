@@ -374,3 +374,12 @@ When double-click startup on Windows runs without environment variables, the def
 **修改了 `/admin/runtime` 里的 Local API Key，但客户端还是旧行为。**  
 这是预期行为。运行时 key 保存到 `runtime.json` 后需要重启进程才会生效，当前进程继续使用启动时读到的旧 key。  
 This is expected. Runtime key changes are saved to `runtime.json` but take effect only after restart; the current process keeps using the key it loaded at startup.
+
+## Upstream Error Failover And Diagnostics
+
+- `2xx` upstream responses are treated as successful gateway responses.
+- Transport errors, `408`, `404`, `429`, and `5xx` continue to count as failover failures.
+- `402` and `403` responses are inspected before passthrough. If the upstream body indicates quota exhaustion, insufficient balance, missing subscription, billing required, or model unavailable, the gateway records the upstream error detail and tries the next eligible station.
+- Unrecognized `402` and `403` responses are forwarded to the client and still recorded as upstream passthrough error details for diagnosis.
+- Upstream passthrough error bodies are stored in full up to 10KB. Longer bodies are truncated and marked. Only diagnostic response headers such as `cf-ray`, `request-id`, `x-request-id`, `x-correlation-id`, `openai-processing-ms`, and `content-type` are retained.
+- `/admin/logs` shows recent upstream passthrough error details. `/admin/status` shows recent upstream error details per station.

@@ -657,6 +657,96 @@ func TestRuntimePageNormalizesWildcardListenAddresses(t *testing.T) {
 	}
 }
 
+func TestStatusPageShowsRecentUpstreamErrorDetails(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	stationID, err := createAdminTestStation(store, "station-a")
+	if err != nil {
+		t.Fatalf("CreateStation error = %v", err)
+	}
+	if err := store.SaveStationStatus(ctx, core.StationStatus{
+		StationID:     stationID,
+		State:         "healthy",
+		LastCheckedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("SaveStationStatus error = %v", err)
+	}
+	if err := store.InsertUpstreamErrorLog(ctx, core.UpstreamErrorLog{
+		Protocol:    core.ProtocolOpenAI,
+		Alias:       "gpt-5",
+		StationName: "station-a",
+		StatusCode:  http.StatusForbidden,
+		ErrorKind:   "subscription_not_found",
+		Body:        `{"code":"SUBSCRIPTION_NOT_FOUND"}`,
+		Headers:     `{"request-id":["abc"]}`,
+		CreatedAt:   time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("InsertUpstreamErrorLog error = %v", err)
+	}
+
+	handler, err := admin.NewHandler(store, adminWriteToken)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "subscription_not_found") || !strings.Contains(body, "SUBSCRIPTION_NOT_FOUND") {
+		t.Fatalf("body did not contain upstream error details: %s", body)
+	}
+}
+
+func TestLogsPageShowsUpstreamErrorDetails(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.InsertUpstreamErrorLog(context.Background(), core.UpstreamErrorLog{
+		Protocol:    core.ProtocolOpenAI,
+		Alias:       "gpt-5",
+		StationName: "station-a",
+		StatusCode:  http.StatusPaymentRequired,
+		ErrorKind:   "quota_limited",
+		Body:        `{"error":"已达到用量上限"}`,
+		Headers:     `{"cf-ray":["ray"]}`,
+		CreatedAt:   time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("InsertUpstreamErrorLog error = %v", err)
+	}
+
+	handler, err := admin.NewHandler(store, adminWriteToken)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/logs", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "Upstream Errors") || !strings.Contains(body, "quota_limited") || !strings.Contains(body, "已达到用量上限") {
+		t.Fatalf("body did not contain upstream error log: %s", body)
+	}
+}
+
 func TestSetupPostRejectsMissingOrInvalidWriteToken(t *testing.T) {
 	testCases := []struct {
 		name  string

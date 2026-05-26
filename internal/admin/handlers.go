@@ -39,6 +39,8 @@ type store interface {
 	ListStationStatuses(ctx context.Context) (map[int64]core.StationStatus, error)
 	ListRequestLogs(ctx context.Context, limit int) ([]core.RequestLog, error)
 	ListFailoverEvents(ctx context.Context, limit int) ([]core.FailoverEvent, error)
+	ListUpstreamErrorLogs(ctx context.Context, limit int) ([]core.UpstreamErrorLog, error)
+	ListRecentUpstreamErrorLogsByStation(ctx context.Context, limitPerStation int) (map[string][]core.UpstreamErrorLog, error)
 	UsageByStation(ctx context.Context) ([]core.UsageRow, error)
 	UsageByAlias(ctx context.Context) ([]core.UsageRow, error)
 }
@@ -723,11 +725,17 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	recentErrors, err := h.store.ListRecentUpstreamErrorLogsByStation(r.Context(), 3)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	data := StatusPage{
-		Title:    "Status",
-		Stations: stations,
-		Statuses: statuses,
+		Title:                "Status",
+		Stations:             stations,
+		Statuses:             statuses,
+		RecentUpstreamErrors: recentErrors,
 	}
 	if err := h.renderPage(w, "templates/status.gohtml", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -741,6 +749,11 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	failoverEvents, err := h.store.ListFailoverEvents(r.Context(), 50)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	upstreamErrors, err := h.store.ListUpstreamErrorLogs(r.Context(), 50)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -760,6 +773,7 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request) {
 		Title:          "Logs",
 		RequestLogs:    requestLogs,
 		FailoverEvents: failoverEvents,
+		UpstreamErrors: upstreamErrors,
 		UsageByStation: usageByStation,
 		UsageByAlias:   usageByAlias,
 	}

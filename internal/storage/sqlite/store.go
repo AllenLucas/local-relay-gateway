@@ -459,6 +459,11 @@ func (s *Store) DeleteRequestLogsBefore(ctx context.Context, cutoff time.Time) e
 	return err
 }
 
+func (s *Store) DeleteUpstreamErrorLogsBefore(ctx context.Context, cutoff time.Time) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM upstream_error_logs WHERE created_at < ?`, cutoff.Format(time.RFC3339))
+	return err
+}
+
 func (s *Store) ListRequestLogsSince(ctx context.Context, since time.Time) ([]core.RequestLog, error) {
 	rows, err := s.db.QueryContext(ctx, `
         SELECT id, protocol, alias, station_name, status_code, duration_ms,
@@ -594,6 +599,102 @@ func (s *Store) ListFailoverEvents(ctx context.Context, limit int) ([]core.Failo
 		events = append(events, item)
 	}
 	return events, rows.Err()
+}
+
+func (s *Store) InsertUpstreamErrorLog(ctx context.Context, entry core.UpstreamErrorLog) error {
+	_, err := s.db.ExecContext(ctx, `
+        INSERT INTO upstream_error_logs (
+            protocol, alias, station_name, status_code, error_kind,
+            body, headers, truncated, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+		string(entry.Protocol),
+		entry.Alias,
+		entry.StationName,
+		entry.StatusCode,
+		entry.ErrorKind,
+		entry.Body,
+		entry.Headers,
+		boolToInt(entry.Truncated),
+		entry.CreatedAt.Format(time.RFC3339),
+	)
+	return err
+}
+
+func (s *Store) ListUpstreamErrorLogs(ctx context.Context, limit int) ([]core.UpstreamErrorLog, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT id, protocol, alias, station_name, status_code, error_kind,
+               body, headers, truncated, created_at
+        FROM upstream_error_logs
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+    `, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanUpstreamErrorLogs(rows)
+}
+
+func (s *Store) ListRecentUpstreamErrorLogsByStation(ctx context.Context, limitPerStation int) (map[string][]core.UpstreamErrorLog, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT id, protocol, alias, station_name, status_code, error_kind,
+               body, headers, truncated, created_at
+        FROM (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY station_name
+                       ORDER BY created_at DESC, id DESC
+                   ) AS station_rank
+            FROM upstream_error_logs
+        )
+        WHERE station_rank <= ?
+        ORDER BY station_name ASC, created_at DESC, id DESC
+    `, limitPerStation)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	logs, err := scanUpstreamErrorLogs(rows)
+	if err != nil {
+		return nil, err
+	}
+	byStation := make(map[string][]core.UpstreamErrorLog)
+	for _, item := range logs {
+		byStation[item.StationName] = append(byStation[item.StationName], item)
+	}
+	return byStation, nil
+}
+
+func scanUpstreamErrorLogs(rows *sql.Rows) ([]core.UpstreamErrorLog, error) {
+	var logs []core.UpstreamErrorLog
+	for rows.Next() {
+		var item core.UpstreamErrorLog
+		var protocolValue string
+		var truncated int
+		var createdAt string
+		if err := rows.Scan(
+			&item.ID,
+			&protocolValue,
+			&item.Alias,
+			&item.StationName,
+			&item.StatusCode,
+			&item.ErrorKind,
+			&item.Body,
+			&item.Headers,
+			&truncated,
+			&createdAt,
+		); err != nil {
+			return nil, err
+		}
+		item.Protocol = core.Protocol(protocolValue)
+		item.Truncated = truncated == 1
+		item.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		logs = append(logs, item)
+	}
+	return logs, rows.Err()
 }
 
 func (s *Store) UsageByStation(ctx context.Context) ([]core.UsageRow, error) {
