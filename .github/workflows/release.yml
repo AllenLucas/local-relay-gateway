@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build, for example v0.3.0'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -12,10 +18,13 @@ jobs:
   release:
     name: Build & publish Windows binaries
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -34,7 +43,7 @@ jobs:
         run: |
           mkdir -p dist
           go build -trimpath -ldflags="-s -w" \
-            -o dist/local-relay-gateway-${GITHUB_REF_NAME}-windows-amd64.exe \
+            -o dist/local-relay-gateway-${RELEASE_TAG}-windows-amd64.exe \
             ./cmd/local-relay-gateway
 
       - name: Build windows/arm64
@@ -44,7 +53,7 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           go build -trimpath -ldflags="-s -w" \
-            -o dist/local-relay-gateway-${GITHUB_REF_NAME}-windows-arm64.exe \
+            -o dist/local-relay-gateway-${RELEASE_TAG}-windows-arm64.exe \
             ./cmd/local-relay-gateway
 
       - name: Build windows/386
@@ -54,7 +63,7 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           go build -trimpath -ldflags="-s -w" \
-            -o dist/local-relay-gateway-${GITHUB_REF_NAME}-windows-386.exe \
+            -o dist/local-relay-gateway-${RELEASE_TAG}-windows-386.exe \
             ./cmd/local-relay-gateway
 
       - name: Generate SHA-256 checksums
@@ -69,6 +78,7 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
             dist/*.exe
             dist/SHA256SUMS.txt
