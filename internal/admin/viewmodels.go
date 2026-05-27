@@ -35,12 +35,13 @@ type StatusPage struct {
 }
 
 type LogsPage struct {
-	Title          string
-	RequestLogs    []core.RequestLog
-	FailoverEvents []core.FailoverEvent
-	UpstreamErrors []core.UpstreamErrorLog
-	UsageByStation []core.UsageRow
-	UsageByAlias   []core.UsageRow
+	Title           string
+	RequestLogs     []core.RequestLog
+	FailoverEvents  []core.FailoverEvent
+	UpstreamErrors  []core.UpstreamErrorLog
+	UsageByStation  []core.UsageRow
+	UsageByAlias    []core.UsageRow
+	DailyTokenUsage []core.DailyTokenUsageRow
 }
 
 type SetupPage struct {

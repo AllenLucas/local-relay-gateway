@@ -64,6 +64,12 @@ type NormalizedRequest struct {
 	Headers  map[string][]string
 }
 
+type TokenUsage struct {
+	InputTokens  int
+	OutputTokens int
+	TotalTokens  int
+}
+
 type ResolvedTarget struct {
 	Station       Station
 	Mapping       ModelMapping
@@ -73,16 +79,19 @@ type ResolvedTarget struct {
 }
 
 type RequestLog struct {
-	ID          int64
-	Protocol    Protocol
-	Alias       string
-	StationName string
-	StatusCode  int
-	DurationMS  int64
-	WasStream   bool
-	DidFailover bool
-	ErrorKind   string
-	CreatedAt   time.Time
+	ID           int64
+	Protocol     Protocol
+	Alias        string
+	StationName  string
+	StatusCode   int
+	DurationMS   int64
+	WasStream    bool
+	DidFailover  bool
+	ErrorKind    string
+	InputTokens  int
+	OutputTokens int
+	TotalTokens  int
+	CreatedAt    time.Time
 }
 
 type FailoverEvent struct {
@@ -113,4 +122,16 @@ type UsageRow struct {
 	Alias        string
 	RequestCount int
 	ErrorCount   int
+}
+
+type DailyTokenUsageRow struct {
+	Day             string
+	Protocol        Protocol
+	Alias           string
+	StationName     string
+	RequestCount    int
+	CountedRequests int
+	InputTokens     int
+	OutputTokens    int
+	TotalTokens     int
 }

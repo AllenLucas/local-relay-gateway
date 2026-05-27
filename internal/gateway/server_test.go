@@ -409,6 +409,53 @@ func TestResponsesHandlerProxiesSuccessfulResponseBodyAndHeader(t *testing.T) {
 	}
 }
 
+func TestResponsesHandlerPersistsTokenUsage(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_success","status":"completed","usage":{"input_tokens":12,"output_tokens":8,"total_tokens":20}}`))
+	}))
+	defer upstream.Close()
+
+	handler, store := newGatewayTestServerAndStore(t, []gatewayStationFixture{
+		{
+			station: core.Station{
+				Name:                         "station-a",
+				Enabled:                      true,
+				Priority:                     20,
+				CooldownSeconds:              30,
+				HealthCheckIntervalSeconds:   15,
+				HealthCheckTimeoutSeconds:    5,
+				ConsecutiveFailureThreshold:  1,
+				ConsecutiveRecoveryThreshold: 2,
+				OpenAIBaseURL:                upstream.URL,
+				OpenAIAPIKey:                 "OPENAI_A",
+			},
+			mapping: core.ModelMapping{
+				Protocol:      core.ProtocolOpenAI,
+				Alias:         "gpt-5",
+				UpstreamModel: "gpt-5.1",
+				Enabled:       true,
+			},
+		},
+	})
+
+	recorder := performResponsesRequest(handler, "local-test-key", []byte(`{"model":"gpt-5","input":"hello","stream":false}`))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	logs, err := store.ListRequestLogs(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("ListRequestLogs error = %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("len(logs) = %d, want 1", len(logs))
+	}
+	if logs[0].InputTokens != 12 || logs[0].OutputTokens != 8 || logs[0].TotalTokens != 20 {
+		t.Fatalf("request log tokens = %d/%d/%d, want 12/8/20", logs[0].InputTokens, logs[0].OutputTokens, logs[0].TotalTokens)
+	}
+}
+
 func TestResponsesHandlerTrimsModelAliasBeforeRouting(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]any
@@ -910,6 +957,21 @@ func newGatewayTestServer(t *testing.T, fixtures []gatewayStationFixture) http.H
 func newGatewayTestServerWithOptions(t *testing.T, options gateway.Options, fixtures []gatewayStationFixture) http.Handler {
 	t.Helper()
 
+	handler, _ := newGatewayTestServerAndStoreWithOptions(t, options, fixtures)
+	return handler
+}
+
+func newGatewayTestServerAndStore(t *testing.T, fixtures []gatewayStationFixture) (http.Handler, *sqlitestore.Store) {
+	t.Helper()
+
+	return newGatewayTestServerAndStoreWithOptions(t, gateway.Options{
+		Runtime: config.Runtime{LocalAPIKey: "local-test-key"},
+	}, fixtures)
+}
+
+func newGatewayTestServerAndStoreWithOptions(t *testing.T, options gateway.Options, fixtures []gatewayStationFixture) (http.Handler, *sqlitestore.Store) {
+	t.Helper()
+
 	dbPath := filepath.Join(t.TempDir(), "gateway.db")
 	store, err := sqlitestore.NewStore(dbPath)
 	if err != nil {
@@ -935,7 +997,7 @@ func newGatewayTestServerWithOptions(t *testing.T, options gateway.Options, fixt
 		}
 	}
 
-	return gateway.NewServerWithOptions(options, store, routing.NewSelector(nil))
+	return gateway.NewServerWithOptions(options, store, routing.NewSelector(nil)), store
 }
 
 func performResponsesRequest(handler http.Handler, apiKey string, body []byte) *httptest.ResponseRecorder {

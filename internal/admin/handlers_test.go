@@ -747,6 +747,47 @@ func TestLogsPageShowsUpstreamErrorDetails(t *testing.T) {
 	}
 }
 
+func TestLogsPageShowsDailyTokenUsage(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.InsertRequestLog(context.Background(), core.RequestLog{
+		Protocol:     core.ProtocolOpenAI,
+		Alias:        "gpt-5",
+		StationName:  "station-a",
+		StatusCode:   http.StatusOK,
+		InputTokens:  30,
+		OutputTokens: 15,
+		TotalTokens:  45,
+		CreatedAt:    time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("InsertRequestLog error = %v", err)
+	}
+
+	handler, err := admin.NewHandler(store, adminWriteToken)
+	if err != nil {
+		t.Fatalf("NewHandler error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/logs", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	for _, want := range []string{"Daily Token Usage", "2026-05-26", "station-a", "gpt-5", "30", "15", "45"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body did not contain %q: %s", want, body)
+		}
+	}
+}
+
 func TestSetupPostRejectsMissingOrInvalidWriteToken(t *testing.T) {
 	testCases := []struct {
 		name  string

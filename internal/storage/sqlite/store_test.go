@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,8 @@ import (
 	"relay-gateway/internal/configsync"
 	"relay-gateway/internal/core"
 	sqlitestore "relay-gateway/internal/storage/sqlite"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestStorePersistsStationsAndMappings(t *testing.T) {
@@ -754,5 +757,138 @@ func TestStoreSummarizesUsageAndPrunesOldLogs(t *testing.T) {
 	}
 	if upstreamErrors[0].StationName != "station-b" {
 		t.Fatalf("upstream error station = %q, want station-b", upstreamErrors[0].StationName)
+	}
+}
+
+func TestStorePersistsTokenUsageAndDailySummary(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	day := time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC)
+	entries := []core.RequestLog{
+		{
+			Protocol:     core.ProtocolOpenAI,
+			Alias:        "gpt-5",
+			StationName:  "station-a",
+			StatusCode:   http.StatusOK,
+			InputTokens:  10,
+			OutputTokens: 5,
+			TotalTokens:  15,
+			CreatedAt:    day,
+		},
+		{
+			Protocol:     core.ProtocolOpenAI,
+			Alias:        "gpt-5",
+			StationName:  "station-a",
+			StatusCode:   http.StatusOK,
+			InputTokens:  20,
+			OutputTokens: 10,
+			TotalTokens:  30,
+			CreatedAt:    day.Add(2 * time.Hour),
+		},
+		{
+			Protocol:     core.ProtocolAnthropic,
+			Alias:        "claude-sonnet",
+			StationName:  "station-b",
+			StatusCode:   http.StatusOK,
+			InputTokens:  7,
+			OutputTokens: 3,
+			TotalTokens:  10,
+			CreatedAt:    day.Add(24 * time.Hour),
+		},
+	}
+	for _, entry := range entries {
+		if err := store.InsertRequestLog(ctx, entry); err != nil {
+			t.Fatalf("InsertRequestLog error = %v", err)
+		}
+	}
+
+	logs, err := store.ListRequestLogs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListRequestLogs error = %v", err)
+	}
+	if logs[0].InputTokens != 7 || logs[0].OutputTokens != 3 || logs[0].TotalTokens != 10 {
+		t.Fatalf("newest log tokens = %d/%d/%d, want 7/3/10", logs[0].InputTokens, logs[0].OutputTokens, logs[0].TotalTokens)
+	}
+
+	rows, err := store.DailyTokenUsage(ctx, 10)
+	if err != nil {
+		t.Fatalf("DailyTokenUsage error = %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("len(rows) = %d, want 2", len(rows))
+	}
+	if rows[0].Day != "2026-05-27" || rows[0].Protocol != core.ProtocolAnthropic || rows[0].Alias != "claude-sonnet" {
+		t.Fatalf("first row identity = %+v, want 2026-05-27 anthropic claude-sonnet", rows[0])
+	}
+	if rows[0].RequestCount != 1 || rows[0].InputTokens != 7 || rows[0].OutputTokens != 3 || rows[0].TotalTokens != 10 {
+		t.Fatalf("first row totals = %+v, want one request and 7/3/10 tokens", rows[0])
+	}
+	if rows[1].Day != "2026-05-26" || rows[1].StationName != "station-a" || rows[1].RequestCount != 2 {
+		t.Fatalf("second row identity = %+v, want 2026-05-26 station-a two requests", rows[1])
+	}
+	if rows[1].InputTokens != 30 || rows[1].OutputTokens != 15 || rows[1].TotalTokens != 45 {
+		t.Fatalf("second row totals = %+v, want 30/15/45 tokens", rows[1])
+	}
+}
+
+func TestStoreMigratesRequestLogTokenColumns(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open error = %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+        CREATE TABLE request_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            protocol TEXT NOT NULL,
+            alias TEXT NOT NULL,
+            station_name TEXT NOT NULL,
+            status_code INTEGER NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            was_stream INTEGER NOT NULL,
+            did_failover INTEGER NOT NULL,
+            error_kind TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    `); err != nil {
+		t.Fatalf("create old request_logs schema error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("db.Close error = %v", err)
+	}
+
+	store, err := sqlitestore.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.InsertRequestLog(ctx, core.RequestLog{
+		Protocol:     core.ProtocolOpenAI,
+		Alias:        "gpt-5",
+		StationName:  "station-a",
+		StatusCode:   http.StatusOK,
+		InputTokens:  1,
+		OutputTokens: 2,
+		TotalTokens:  3,
+		CreatedAt:    time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("InsertRequestLog after migration error = %v", err)
+	}
+	logs, err := store.ListRequestLogs(ctx, 1)
+	if err != nil {
+		t.Fatalf("ListRequestLogs error = %v", err)
+	}
+	if len(logs) != 1 || logs[0].TotalTokens != 3 {
+		t.Fatalf("logs after migration = %+v, want migrated token columns", logs)
 	}
 }

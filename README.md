@@ -25,7 +25,7 @@ This project collapses multiple upstream OpenAI and Anthropic relays into one lo
 - 转发本地客户端传入的 `User-Agent` 到上游；客户端未发送时会压制 Go 默认 `User-Agent`。 / Forwards the local client's `User-Agent` upstream; when the client omits it, suppresses Go's default `User-Agent`.
 - 按站点优先级选择上游，并在请求尚未向客户端输出时执行失败切换。 / Selects upstreams by station priority and fails over before client output has started.
 - 通过模型别名把本地稳定名称映射到真实上游模型名。 / Maps stable local aliases to real upstream model names.
-- 使用 SQLite 保存站点、映射、状态、请求日志和切换事件。 / Uses SQLite to persist stations, mappings, status, request logs, and failover events.
+- 使用 SQLite 保存站点、映射、状态、请求日志、每日 Token 使用量和切换事件。 / Uses SQLite to persist stations, mappings, status, request logs, daily token usage, and failover events.
 - 提供本地 Admin UI 进行站点、映射、同步、状态和日志排查。 / Includes a local admin UI for station, mapping, sync, status, and log inspection.
 
 ## 平台支持 / Platform Support
@@ -162,7 +162,7 @@ export ANTHROPIC_API_KEY="replace-this-key"
 - `/admin/stations` 和 `/admin/mappings` 支持删除当前设备的本地配置；删除只有在之后上传 WebDAV 快照并被其他设备拉取后才会传播。 / `/admin/stations` and `/admin/mappings` can delete local config on the current device; deletion propagates only after a later WebDAV upload is pulled by other devices.
 - `/admin/mappings` 用来建立、编辑和删除别名映射。 / `/admin/mappings` creates, edits, and deletes alias mappings.
 - `/admin/status` 展示每个站点的状态、冷却时间、失败数和恢复数。 / `/admin/status` shows station state, cooldown time, failures, and recoveries.
-- `/admin/logs` 展示请求日志、故障切换事件和用量统计。 / `/admin/logs` shows request logs, failover events, and usage summaries.
+- `/admin/logs` 展示请求日志、每日 Token 使用量、故障切换事件和用量统计。Token 只统计上游响应 JSON 中实际返回的 `usage` 字段；流式响应或上游未返回 usage 时记为 `0`，每日汇总按 UTC 日期分组。 / `/admin/logs` shows request logs, daily token usage, failover events, and usage summaries. Token counts come only from the upstream JSON `usage` field; streaming responses or upstreams that omit usage are recorded as `0`, and daily summaries are grouped by UTC date.
 
 ## 健康检查、切换与冷却 / Health, Failover, and Cooldown
 

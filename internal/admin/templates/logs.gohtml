@@ -14,6 +14,9 @@
       <th>流式</th>
       <th>切换</th>
       <th>错误类型</th>
+      <th>Input Tokens</th>
+      <th>Output Tokens</th>
+      <th>Total Tokens</th>
       <th>时间</th>
     </tr>
   </thead>
@@ -32,10 +35,13 @@
       <td class="muted">{{if .WasStream}}yes{{else}}no{{end}}</td>
       <td class="muted">{{if .DidFailover}}<span class="pill warn">failover</span>{{else}}—{{end}}</td>
       <td class="muted">{{if .ErrorKind}}{{.ErrorKind}}{{else}}—{{end}}</td>
+      <td>{{.InputTokens}}</td>
+      <td>{{.OutputTokens}}</td>
+      <td>{{.TotalTokens}}</td>
       <td class="muted"><time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}" data-local-time>{{.CreatedAt.Format "2006-01-02 15:04:05 UTC"}}</time></td>
     </tr>
     {{else}}
-    <tr><td colspan="9" class="muted">No request logs recorded yet. / 暂无请求日志。</td></tr>
+    <tr><td colspan="12" class="muted">No request logs recorded yet. / 暂无请求日志。</td></tr>
     {{end}}
   </tbody>
 </table>
@@ -64,6 +70,41 @@
     </tr>
     {{else}}
     <tr><td colspan="6" class="muted">No failover events recorded yet. / 暂无切换事件。</td></tr>
+    {{end}}
+  </tbody>
+</table>
+
+<h2>Daily Token Usage / 每日 Token 使用量</h2>
+<p class="muted">按 UTC 日期、协议、别名和站点汇总；只统计上游响应中实际返回的 usage 字段。</p>
+<table>
+  <thead>
+    <tr>
+      <th>日期(UTC)</th>
+      <th>协议</th>
+      <th>别名</th>
+      <th>站点</th>
+      <th>请求数</th>
+      <th>计入请求</th>
+      <th>Input Tokens</th>
+      <th>Output Tokens</th>
+      <th>Total Tokens</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .DailyTokenUsage}}
+    <tr>
+      <td>{{.Day}}</td>
+      <td>{{.Protocol}}</td>
+      <td>{{.Alias}}</td>
+      <td>{{.StationName}}</td>
+      <td>{{.RequestCount}}</td>
+      <td>{{.CountedRequests}}</td>
+      <td>{{.InputTokens}}</td>
+      <td>{{.OutputTokens}}</td>
+      <td>{{.TotalTokens}}</td>
+    </tr>
+    {{else}}
+    <tr><td colspan="9" class="muted">No token usage data available. / 暂无 Token 使用量数据。</td></tr>
     {{end}}
   </tbody>
 </table>

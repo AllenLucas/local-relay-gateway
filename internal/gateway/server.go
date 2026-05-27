@@ -47,6 +47,7 @@ type store interface {
 	ListRecentUpstreamErrorLogsByStation(ctx context.Context, limitPerStation int) (map[string][]core.UpstreamErrorLog, error)
 	UsageByStation(ctx context.Context) ([]core.UsageRow, error)
 	UsageByAlias(ctx context.Context) ([]core.UsageRow, error)
+	DailyTokenUsage(ctx context.Context, limit int) ([]core.DailyTokenUsageRow, error)
 }
 
 type Server struct {
@@ -239,23 +240,24 @@ func (s *Server) proxyNormalizedRequest(
 			continue
 		}
 
-		if err := s.writeUpstreamResponse(w, resp); err != nil {
+		usage, err := s.writeUpstreamResponse(w, resp, normalized.Stream)
+		if err != nil {
 			status := s.selector.RecordFailure(target.Station, statuses[target.Station.ID], err.Error())
 			statuses[target.Station.ID] = status
 			_ = s.store.SaveStationStatus(ctx, status)
-			_ = s.store.InsertRequestLog(ctx, requestLog(normalized, target.Station.Name, resp.StatusCode, startedAt, didFailover, "stream_copy_error"))
+			_ = s.store.InsertRequestLog(ctx, requestLog(normalized, target.Station.Name, resp.StatusCode, startedAt, didFailover, "stream_copy_error", usage))
 			return
 		}
 
 		status := s.selector.RecordSuccess(target.Station, statuses[target.Station.ID])
 		statuses[target.Station.ID] = status
 		_ = s.store.SaveStationStatus(ctx, status)
-		_ = s.store.InsertRequestLog(ctx, requestLog(normalized, target.Station.Name, resp.StatusCode, startedAt, didFailover, ""))
+		_ = s.store.InsertRequestLog(ctx, requestLog(normalized, target.Station.Name, resp.StatusCode, startedAt, didFailover, "", usage))
 		return
 	}
 
 	if attempted != nil {
-		_ = s.store.InsertRequestLog(ctx, requestLog(normalized, attempted.Station.Name, http.StatusBadGateway, startedAt, didFailover, errorKind))
+		_ = s.store.InsertRequestLog(ctx, requestLog(normalized, attempted.Station.Name, http.StatusBadGateway, startedAt, didFailover, errorKind, core.TokenUsage{}))
 	}
 	if len(attemptFailures) > 0 {
 		http.Error(w, "all upstream stations failed: "+strings.Join(attemptFailures, "; "), http.StatusBadGateway)
@@ -264,23 +266,34 @@ func (s *Server) proxyNormalizedRequest(
 	http.Error(w, "all upstream stations failed", http.StatusBadGateway)
 }
 
-func (s *Server) writeUpstreamResponse(w http.ResponseWriter, resp *http.Response) error {
+func (s *Server) writeUpstreamResponse(w http.ResponseWriter, resp *http.Response, stream bool) (core.TokenUsage, error) {
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
+	if !stream {
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			return core.TokenUsage{}, err
+		}
+		if _, err := w.Write(body); err != nil {
+			return core.TokenUsage{}, err
+		}
+		return extractTokenUsage(body), nil
+	}
 	if flusher, ok := w.(http.Flusher); ok {
 		if _, err := io.Copy(w, resp.Body); err != nil {
 			flusher.Flush()
 			_ = resp.Body.Close()
-			return err
+			return core.TokenUsage{}, err
 		}
 		flusher.Flush()
 	} else {
 		if _, err := io.Copy(w, resp.Body); err != nil {
 			_ = resp.Body.Close()
-			return err
+			return core.TokenUsage{}, err
 		}
 	}
-	return resp.Body.Close()
+	return core.TokenUsage{}, resp.Body.Close()
 }
 
 func copyHeader(dst http.Header, src http.Header) {
@@ -302,17 +315,20 @@ func deriveAdminWriteToken(localAPIKey string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
-func requestLog(req core.NormalizedRequest, stationName string, statusCode int, startedAt time.Time, didFailover bool, errorKind string) core.RequestLog {
+func requestLog(req core.NormalizedRequest, stationName string, statusCode int, startedAt time.Time, didFailover bool, errorKind string, usage core.TokenUsage) core.RequestLog {
 	return core.RequestLog{
-		Protocol:    req.Protocol,
-		Alias:       req.Alias,
-		StationName: stationName,
-		StatusCode:  statusCode,
-		DurationMS:  time.Since(startedAt).Milliseconds(),
-		WasStream:   req.Stream,
-		DidFailover: didFailover,
-		ErrorKind:   errorKind,
-		CreatedAt:   time.Now().UTC(),
+		Protocol:     req.Protocol,
+		Alias:        req.Alias,
+		StationName:  stationName,
+		StatusCode:   statusCode,
+		DurationMS:   time.Since(startedAt).Milliseconds(),
+		WasStream:    req.Stream,
+		DidFailover:  didFailover,
+		ErrorKind:    errorKind,
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
+		TotalTokens:  usage.TotalTokens,
+		CreatedAt:    time.Now().UTC(),
 	}
 }
 

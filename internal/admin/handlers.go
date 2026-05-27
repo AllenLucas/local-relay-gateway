@@ -43,6 +43,7 @@ type store interface {
 	ListRecentUpstreamErrorLogsByStation(ctx context.Context, limitPerStation int) (map[string][]core.UpstreamErrorLog, error)
 	UsageByStation(ctx context.Context) ([]core.UsageRow, error)
 	UsageByAlias(ctx context.Context) ([]core.UsageRow, error)
+	DailyTokenUsage(ctx context.Context, limit int) ([]core.DailyTokenUsageRow, error)
 }
 
 type Handler struct {
@@ -768,14 +769,20 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	dailyTokenUsage, err := h.store.DailyTokenUsage(r.Context(), 100)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	data := LogsPage{
-		Title:          "Logs",
-		RequestLogs:    requestLogs,
-		FailoverEvents: failoverEvents,
-		UpstreamErrors: upstreamErrors,
-		UsageByStation: usageByStation,
-		UsageByAlias:   usageByAlias,
+		Title:           "Logs",
+		RequestLogs:     requestLogs,
+		FailoverEvents:  failoverEvents,
+		UpstreamErrors:  upstreamErrors,
+		UsageByStation:  usageByStation,
+		UsageByAlias:    usageByAlias,
+		DailyTokenUsage: dailyTokenUsage,
 	}
 	if err := h.renderPage(w, "templates/logs.gohtml", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

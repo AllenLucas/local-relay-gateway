@@ -24,11 +24,64 @@ func NewStore(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	store := &Store{db: db}
+	if err := store.migrate(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return store, nil
 }
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+func (s *Store) migrate() error {
+	tokenColumns := []struct {
+		name       string
+		definition string
+	}{
+		{name: "input_tokens", definition: "input_tokens INTEGER NOT NULL DEFAULT 0"},
+		{name: "output_tokens", definition: "output_tokens INTEGER NOT NULL DEFAULT 0"},
+		{name: "total_tokens", definition: "total_tokens INTEGER NOT NULL DEFAULT 0"},
+	}
+	for _, column := range tokenColumns {
+		exists, err := s.columnExists("request_logs", column.name)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err := s.db.Exec(`ALTER TABLE request_logs ADD COLUMN ` + column.definition); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) columnExists(table string, column string) (bool, error) {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue any
+		var primaryKey int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func (s *Store) CreateStation(ctx context.Context, station core.Station) (int64, error) {
@@ -438,8 +491,9 @@ func (s *Store) InsertRequestLog(ctx context.Context, entry core.RequestLog) err
 	_, err := s.db.ExecContext(ctx, `
         INSERT INTO request_logs (
             protocol, alias, station_name, status_code, duration_ms,
-            was_stream, did_failover, error_kind, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            was_stream, did_failover, error_kind,
+            input_tokens, output_tokens, total_tokens, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
 		string(entry.Protocol),
 		entry.Alias,
@@ -449,6 +503,9 @@ func (s *Store) InsertRequestLog(ctx context.Context, entry core.RequestLog) err
 		boolToInt(entry.WasStream),
 		boolToInt(entry.DidFailover),
 		entry.ErrorKind,
+		entry.InputTokens,
+		entry.OutputTokens,
+		entry.TotalTokens,
 		entry.CreatedAt.Format(time.RFC3339),
 	)
 	return err
@@ -467,7 +524,8 @@ func (s *Store) DeleteUpstreamErrorLogsBefore(ctx context.Context, cutoff time.T
 func (s *Store) ListRequestLogsSince(ctx context.Context, since time.Time) ([]core.RequestLog, error) {
 	rows, err := s.db.QueryContext(ctx, `
         SELECT id, protocol, alias, station_name, status_code, duration_ms,
-               was_stream, did_failover, error_kind, created_at
+               was_stream, did_failover, error_kind,
+               input_tokens, output_tokens, total_tokens, created_at
         FROM request_logs
         WHERE created_at >= ?
         ORDER BY created_at ASC, id ASC
@@ -494,6 +552,9 @@ func (s *Store) ListRequestLogsSince(ctx context.Context, since time.Time) ([]co
 			&wasStream,
 			&didFailover,
 			&item.ErrorKind,
+			&item.InputTokens,
+			&item.OutputTokens,
+			&item.TotalTokens,
 			&createdAt,
 		); err != nil {
 			return nil, err
@@ -510,7 +571,8 @@ func (s *Store) ListRequestLogsSince(ctx context.Context, since time.Time) ([]co
 func (s *Store) ListRequestLogs(ctx context.Context, limit int) ([]core.RequestLog, error) {
 	rows, err := s.db.QueryContext(ctx, `
         SELECT id, protocol, alias, station_name, status_code, duration_ms,
-               was_stream, did_failover, error_kind, created_at
+               was_stream, did_failover, error_kind,
+               input_tokens, output_tokens, total_tokens, created_at
         FROM request_logs
         ORDER BY created_at DESC, id DESC
         LIMIT ?
@@ -537,6 +599,9 @@ func (s *Store) ListRequestLogs(ctx context.Context, limit int) ([]core.RequestL
 			&wasStream,
 			&didFailover,
 			&item.ErrorKind,
+			&item.InputTokens,
+			&item.OutputTokens,
+			&item.TotalTokens,
 			&createdAt,
 		); err != nil {
 			return nil, err
@@ -740,6 +805,50 @@ func (s *Store) UsageByAlias(ctx context.Context) ([]core.UsageRow, error) {
 		if err := rows.Scan(&row.StationName, &row.Alias, &row.RequestCount, &row.ErrorCount); err != nil {
 			return nil, err
 		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DailyTokenUsage(ctx context.Context, limit int) ([]core.DailyTokenUsageRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT substr(created_at, 1, 10) AS day,
+               protocol,
+               alias,
+               station_name,
+               COUNT(*) AS request_count,
+               SUM(CASE WHEN total_tokens > 0 THEN 1 ELSE 0 END) AS counted_requests,
+               COALESCE(SUM(input_tokens), 0) AS input_tokens,
+               COALESCE(SUM(output_tokens), 0) AS output_tokens,
+               COALESCE(SUM(total_tokens), 0) AS total_tokens
+        FROM request_logs
+        GROUP BY day, protocol, alias, station_name
+        ORDER BY day DESC, total_tokens DESC, request_count DESC, station_name ASC
+        LIMIT ?
+    `, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []core.DailyTokenUsageRow
+	for rows.Next() {
+		var row core.DailyTokenUsageRow
+		var protocolValue string
+		if err := rows.Scan(
+			&row.Day,
+			&protocolValue,
+			&row.Alias,
+			&row.StationName,
+			&row.RequestCount,
+			&row.CountedRequests,
+			&row.InputTokens,
+			&row.OutputTokens,
+			&row.TotalTokens,
+		); err != nil {
+			return nil, err
+		}
+		row.Protocol = core.Protocol(protocolValue)
 		out = append(out, row)
 	}
 	return out, rows.Err()

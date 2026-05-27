@@ -325,7 +325,7 @@ curl -X POST "http://127.0.0.1:8787/anthropic/v1/messages" \
 - `Mappings`：按站点和协议维护别名到上游模型名的映射，也支持删除单条映射。 / `Mappings`: manage alias-to-upstream-model mappings by station and protocol, and delete individual mappings.
 - `Sync`：手动上传或拉取 WebDAV 配置快照。 / `Sync`: manually upload or pull WebDAV config snapshots.
 - `Status`：查看 `healthy`、`cooldown` 等状态，以及失败数、恢复数和最后错误。 / `Status`: inspect `healthy`, `cooldown`, and related counters and errors.
-- `Logs`：查看最近请求、故障切换事件、按站点统计和按别名统计。 / `Logs`: inspect recent requests, failover events, usage by station, and usage by alias.
+- `Logs`：查看最近请求、每日 Token 使用量、故障切换事件、按站点统计和按别名统计。Token 只统计上游响应 JSON 中实际返回的 `usage` 字段；流式响应或上游未返回 usage 时记为 `0`，每日汇总按 UTC 日期分组。 / `Logs`: inspect recent requests, daily token usage, failover events, usage by station, and usage by alias. Token counts come only from the upstream JSON `usage` field; streaming responses or upstreams that omit usage are recorded as `0`, and daily summaries are grouped by UTC date.
 
 ## 故障切换、健康检查与冷却 / Failover, Health, and Cooldown
 
